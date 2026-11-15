@@ -1,0 +1,5 @@
+pmark-session 1
+base "a.png" 0123456789abcdef
+crop 1 2 30 40
+stroke e53935ff 8 3 1 2 3.5 4 -5e1 6
+text ffffff80 32 10 20 2.5 000000ff "/f.ttf" "a\"b\\c\nd\x01 cafÃ©"
