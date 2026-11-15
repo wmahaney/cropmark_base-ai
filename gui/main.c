@@ -485,6 +485,23 @@ static void sidecar_path(const app_t *a, char *out, size_t cap)
     with_ext(out, cap, a->out_path, ".pmark");
 }
 
+/* Save As changes the name only: the output keeps its format, so the
+ * extension is fixed and shown after the prompt. */
+static const char *out_ext(const app_t *a)
+{
+    const char *dot = strrchr(a->out_path, '.'), *slash = strrchr(a->out_path, '/');
+    return (dot && (!slash || dot > slash)) ? dot : ".png";
+}
+
+static void prompt_open(app_t *a, prompt_kind k, const char *initial);
+
+static void save_as_open(app_t *a)
+{
+    char stem[1024];
+    with_ext(stem, sizeof stem, a->out_path, "");
+    prompt_open(a, P_SAVE_AS, stem);
+}
+
 static void prompt_open(app_t *a, prompt_kind k, const char *initial)
 {
     text_end(a, true);
@@ -550,14 +567,31 @@ static void prompt_submit(app_t *a)
         save(a, true);
         return;
     }
-    /* P_SAVE_AS */
-    if (pm_format_from_path(a->prompt_buf) == PM_FMT_UNKNOWN) {
-        set_status(a, 5000, "Use a .png, .jpg or .jpeg name");
+    /* P_SAVE_AS: the typed text is a name; the extension stays the output's.
+     * A typed image extension is dropped rather than doubled ("x.jpg" ->
+     * "x.png" for PNG output); other dots ("v1.2") are part of the name. */
+    char name[1024];
+    snprintf(name, sizeof name, "%s", a->prompt_buf);
+    size_t n = strlen(name);
+    while (n && (name[n - 1] == ' ' || name[n - 1] == '\t')) name[--n] = 0;
+    if (pm_format_from_path(name) != PM_FMT_UNKNOWN) {
+        with_ext(name, sizeof name, a->prompt_buf, "");
+        n = strlen(name);
+    }
+    const char *base = strrchr(name, '/');
+    if (n == 0 || (base && base[1] == 0) || !strcmp(base ? base + 1 : name, ".")) {
+        set_status(a, 5000, "Type a file name");
+        return;
+    }
+    char path[1100];
+    int len = snprintf(path, sizeof path, "%s%s", name, out_ext(a));
+    if (len < 0 || (size_t)len >= sizeof a->out_path) {
+        set_status(a, 5000, "That name is too long");
         return;
     }
     prompt_close(a);
-    if (strcmp(a->prompt_buf, a->out_path) != 0) {
-        snprintf(a->out_path, sizeof a->out_path, "%s", a->prompt_buf);
+    if (strcmp(path, a->out_path) != 0) {
+        memcpy(a->out_path, path, (size_t)len + 1); /* len checked above */
         a->out_confirmed = false;
     }
     save(a, false);
@@ -646,7 +680,7 @@ static void build_bar(app_t *a, int ww)
 {
     char line[2400];
     if (a->prompt == P_SAVE_AS)
-        snprintf(line, sizeof line, "Save as: %s|   (Enter save, Esc cancel)", a->prompt_buf);
+        snprintf(line, sizeof line, "Save as: %s|%s   (Enter save, Esc cancel)", a->prompt_buf, out_ext(a));
     else if (a->quit_armed)
         snprintf(line, sizeof line, "Unsaved changes. Ctrl+S saves; close again to discard them");
     else if (a->status[0] && SDL_GetTicks() < a->status_until)
@@ -682,7 +716,7 @@ static void toolbar_click(app_t *a, float x, float y)
         case A_UNDO:    history(a, false); break;
         case A_REDO:    history(a, true); break;
         case A_SAVE:    save(a, false); break;
-        case A_SAVE_AS: prompt_open(a, P_SAVE_AS, a->out_path); break;
+        case A_SAVE_AS: save_as_open(a); break;
         }
         a->ui_dirty = true;
         return;
@@ -715,7 +749,7 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
     if (ctrl) {
         if (sym == SDLK_z) history(a, shift);
         else if (sym == SDLK_y) history(a, true);
-        else if (sym == SDLK_s && shift) prompt_open(a, P_SAVE_AS, a->out_path);
+        else if (sym == SDLK_s && shift) save_as_open(a);
         else if (sym == SDLK_s) save(a, false);
         return;
     }
@@ -1028,17 +1062,21 @@ static int selftest(app_t *a, const char *save_as)
              !memcmp(re.canvas.px, a->doc.canvas.px, (size_t)re.canvas.w * re.canvas.h * 4));
     pm_doc_close(&re);
 
-    /* Save as, typed into the prompt; a second save does not ask again */
+    /* Save as changes the name, never the format: the prompt opens on the
+     * name without its extension, an empty name is refused, and a typed
+     * image extension is replaced by the output's own. */
+    char ext[16], want[1100], typed[1100];
+    snprintf(ext, sizeof ext, "%s", out_ext(a));
+    snprintf(want, sizeof want, "%s%s", save_as, ext);
+    snprintf(typed, sizeof typed, "%s.jpg", save_as);
     st_key(a, SDLK_s, KMOD_CTRL | KMOD_SHIFT);
-    ST_CHECK(a->prompt == P_SAVE_AS);
+    ST_CHECK(a->prompt == P_SAVE_AS && !strstr(a->prompt_buf, ext));
     while (a->prompt_len) st_key(a, SDLK_BACKSPACE, 0);
-    st_type(a, "nope.bmp");
     st_key(a, SDLK_RETURN, 0);
-    ST_CHECK(a->prompt == P_SAVE_AS); /* rejected, prompt stays open */
-    while (a->prompt_len) st_key(a, SDLK_BACKSPACE, 0);
-    st_type(a, save_as);
+    ST_CHECK(a->prompt == P_SAVE_AS); /* empty: refused, prompt stays open */
+    st_type(a, typed);
     st_key(a, SDLK_RETURN, 0);
-    ST_CHECK(a->prompt == P_NONE && pm_path_exists(save_as) && !strcmp(a->out_path, save_as));
+    ST_CHECK(a->prompt == P_NONE && pm_path_exists(want) && !strcmp(a->out_path, want));
     st_key(a, SDLK_m, 0);
     st_drag(a, 0.2f, 0.2f, 0.3f, 0.3f);
     st_key(a, SDLK_s, KMOD_CTRL);

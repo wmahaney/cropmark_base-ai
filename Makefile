@@ -59,7 +59,7 @@ test: $(B)/test_core $(B)/pmark $(B)/imgdiff
 
 test-gui: $(B)/pmark-gui
 	@T=$$(mktemp -d) && cp tests/data/sample.png $$T/photo.png && cp tests/data/sample.png $$T/photo-marked.png && \
-	SDL_VIDEODRIVER=dummy $(B)/pmark-gui $$T/photo.png --selftest $$T/renamed.jpg; rc=$$?; rm -rf $$T; exit $$rc
+	SDL_VIDEODRIVER=dummy $(B)/pmark-gui $$T/photo.png --selftest $$T/renamed; rc=$$?; rm -rf $$T; exit $$rc
 
 golden-update: $(B)/pmark $(B)/imgdiff
 	sh tests/golden.sh $(B) update
