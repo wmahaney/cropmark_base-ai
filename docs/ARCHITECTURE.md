@@ -230,8 +230,13 @@ consumer mishandles profiles.
 - **GUI**: the first save to a path that exists asks for confirmation in the
   status bar (Enter confirms, Esc cancels). Saving over the original photo
   gets a stronger message. Once the window has written a path, later saves
-  to it don't ask again. Save As (Ctrl+Shift+S) prompts for a new path and
-  resets that permission.
+  to it don't ask again. Save As (Ctrl+Shift+S) changes the file *name*
+  only: the prompt shows the current path without its extension, the
+  output's extension is fixed and shown after it, and a typed image
+  extension is replaced rather than doubled (`notes.jpg` saves as
+  `notes.png` when the output is PNG). The output format is chosen once, by
+  the OUTPUT argument. A new name resets the ask-before-replacing
+  permission.
 
 ### 6.4 Session files
 
@@ -319,8 +324,8 @@ be a photo or a `.pmark` session. Output flags are covered in section 6.
   committing with Enter.
 - *Selftest*: `--selftest OUT` drives the real event handlers through a
   scripted session (toolbar clicks, every tool, undo and redo of a crop, text
-  move, save with confirmation, session round trip, Save As with a rejected
-  name, refusal to replace the original) and checks the end state.
+  move, save with confirmation, session round trip, Save As (empty name
+  refused, typed extension replaced), refusal to replace the original) and checks the end state.
   `make test-gui` runs it headless with `SDL_VIDEODRIVER=dummy`.
   `PMARK_SELFTEST_SHOT=file.png` also captures the final frame.
 
@@ -375,7 +380,8 @@ docs/                this document
   substitutes the default font, which changes text metrics.
 - Session base paths outside the session's directory are absolute, so moving
   only the session breaks the link.
-- GUI: Save As is a typed path rather than a native dialog; the caret is
+- GUI: Save As is a typed name rather than a native dialog and cannot
+  change the format (by design for now); the caret is
   always at the end of the text; committed edits cannot be selected or moved.
 - Windows file-system code compiles but has not been run.
 
