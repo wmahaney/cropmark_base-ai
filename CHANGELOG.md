@@ -5,6 +5,19 @@ options, the `.pmark` session format and the C API without a migration
 path, so a session saved by one 0.x version may not open in the next. The
 images cropmark exports (PNG and JPEG) are the durable output.
 
+## Support for the web version (2026-11-16)
+
+No change to the desktop program or its output.
+
+- The editor can be compiled with Emscripten: a `web` section at the end of
+  `gui/gui.c` (inside `#ifdef __EMSCRIPTEN__`) opens a picture handed over by the page,
+  reports a save to the page so it becomes a download, and runs a loop that pauses
+  when there is nothing to do.
+- The toolbar's colours are one table, so the web version can match its page. The
+  desktop colours are the same as before.
+- `PM_MAX_PIXELS` can be lowered at build time (the web version uses 32 megapixels).
+  The default stays 128.
+
 ## Repository renamed (2026-11-16)
 
 - The repository `drawing_tool-claude` is now `cropmark_base-ai`: the desktop

@@ -15,6 +15,10 @@
  *         drag the box to move it before committing
  */
 #include <SDL.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+#endif
 
 #include <math.h>
 #include <stdarg.h>
@@ -101,6 +105,14 @@ typedef struct {
     char status[512];
     Uint32 status_until;
 } app_t;
+
+static app_t g_app; /* the one window; zero-initialised */
+
+#ifdef __EMSCRIPTEN__
+/* Hooks into the page, for the browser build (the "web" section at the end). */
+static void web_request_open(void);
+static void web_saved(const char *path);
+#endif
 
 /* ------------------------------------------------------------- utilities */
 
@@ -566,6 +578,9 @@ static void save(app_t *a, bool confirmed)
         set_status(a, 4000, "Saved %s (%dx%d)%s%s", base_name(a->out_path), a->doc.canvas.w,
                    a->doc.canvas.h, sess_ok ? " + " : "", sess_ok ? base_name(side) : "");
     fprintf(stderr, "cropmark: saved %s\n", a->out_path);
+#ifdef __EMSCRIPTEN__
+    web_saved(a->out_path); /* the page turns the file into a download */
+#endif
 }
 
 static void prompt_submit(app_t *a)
@@ -690,6 +705,18 @@ static void leave_picker(app_t *a)
     a->ui_dirty = true;
 }
 
+/* Open another picture: the picker on the desktop, the page's file chooser in the
+ * browser. */
+static void request_open(app_t *a)
+{
+#ifdef __EMSCRIPTEN__
+    (void)a;
+    web_request_open();
+#else
+    enter_picker(a, NULL);
+#endif
+}
+
 /* ---------------------------------------------------------------- toolbar */
 
 static void fill(pm_image *im, pm_rect r, pm_color c)
@@ -712,9 +739,21 @@ static int label(app_t *a, pm_image *im, const char *s, int x, int h, pm_color c
     return (int)ceilf(w);
 }
 
-static const pm_color UI_BG = {0x24, 0x24, 0x28, 0xff}, UI_BTN = {0x38, 0x38, 0x3e, 0xff},
-                      UI_ON = {0x4a, 0x6f, 0xa5, 0xff}, UI_TXT = {0xee, 0xee, 0xee, 0xff},
-                      UI_DIM = {0x80, 0x80, 0x88, 0xff};
+/* The colours of the toolbar, the status bar and the area around the photo. These
+ * are the desktop colours; the browser build swaps the set to match its page. */
+typedef struct {
+    pm_color bg, btn, on, txt, on_txt, dim, warn, canvas;
+} ui_palette;
+static ui_palette ui = {
+    .bg = {0x24, 0x24, 0x28, 0xff}, .btn = {0x38, 0x38, 0x3e, 0xff}, .on = {0x4a, 0x6f, 0xa5, 0xff},
+    .txt = {0xee, 0xee, 0xee, 0xff}, .on_txt = {0xee, 0xee, 0xee, 0xff}, .dim = {0x80, 0x80, 0x88, 0xff},
+    .warn = {0xff, 0xd5, 0x4f, 0xff}, .canvas = {38, 38, 42, 255},
+};
+#define UI_BG  ui.bg
+#define UI_BTN ui.btn
+#define UI_ON  ui.on
+#define UI_TXT ui.txt
+#define UI_DIM ui.dim
 
 static void add_button(app_t *a, pm_image *im, int *x, const char *text, act_kind k, int arg, bool on,
                        bool enabled)
@@ -724,7 +763,7 @@ static void add_button(app_t *a, pm_image *im, int *x, const char *text, act_kin
     if (!a->font) w = (int)(28 * a->dpi);
     pm_rect r = {*x, m, w, a->tb_h - 2 * m};
     fill(im, r, on ? UI_ON : UI_BTN);
-    label(a, im, text, *x + pad, a->tb_h, enabled ? UI_TXT : UI_DIM, true);
+    label(a, im, text, *x + pad, a->tb_h, !enabled ? UI_DIM : on ? ui.on_txt : UI_TXT, true);
     if (a->n_buttons < 40) a->buttons[a->n_buttons++] = (button){r, k, arg};
     *x += w + (int)(4 * a->dpi);
 }
@@ -790,7 +829,7 @@ static void build_bar(app_t *a, int ww)
     pm_image im;
     if (pm_image_create(&im, ww, a->bar_h, UI_BG) != PM_OK) return;
     label(a, &im, line, (int)(10 * a->dpi), a->bar_h,
-          a->prompt != P_NONE || a->quit_armed ? (pm_color){0xff, 0xd5, 0x4f, 0xff} : UI_TXT, true);
+          a->prompt != P_NONE || a->quit_armed ? ui.warn : UI_TXT, true);
     if (a->bar_tex) SDL_DestroyTexture(a->bar_tex);
     a->bar_tex = SDL_CreateTexture(a->ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, im.w, im.h);
     if (a->bar_tex) SDL_UpdateTexture(a->bar_tex, NULL, im.px, im.w * 4);
@@ -803,7 +842,7 @@ static void toolbar_click(app_t *a, float x, float y)
         const button *b = &a->buttons[i];
         if (!in_rect(b->r, (pm_point){x, y})) continue;
         switch (b->kind) {
-        case A_OPEN:    enter_picker(a, NULL); break;
+        case A_OPEN:    request_open(a); break;
         case A_TOOL:    set_tool(a, (tool_kind)b->arg); break;
         case A_COLOR:   a->color_idx = b->arg; if (a->typing) text_preview(a); break;
         case A_SMALLER: resize(a, false); break;
@@ -843,7 +882,7 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
         } else if (sym == SDLK_ESCAPE) text_end(a, false);
         else if (sym == SDLK_BACKSPACE) { utf8_pop(a->text, &a->text_len); text_preview(a); }
         else if (ctrl && sym == SDLK_s) { text_end(a, true); save(a, false); }
-        else if (ctrl && sym == SDLK_o) { text_end(a, true); enter_picker(a, NULL); }
+        else if (ctrl && sym == SDLK_o) { text_end(a, true); request_open(a); }
         return;
     }
     if (ctrl) {
@@ -851,7 +890,7 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
         else if (sym == SDLK_y) history(a, true);
         else if (sym == SDLK_s && shift) save_as_open(a);
         else if (sym == SDLK_s) save(a, false);
-        else if (sym == SDLK_o) enter_picker(a, NULL);
+        else if (sym == SDLK_o) request_open(a);
         return;
     }
     for (int t = 0; t < T__N; t++)
@@ -1047,7 +1086,7 @@ static void render(app_t *a)
     if (a->ui_dirty) { build_toolbar(a, ww); build_bar(a, ww); a->ui_dirty = false; }
 
     SDL_SetRenderDrawBlendMode(a->ren, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(a->ren, 38, 38, 42, 255);
+    SDL_SetRenderDrawColor(a->ren, ui.canvas.r, ui.canvas.g, ui.canvas.b, 255);
     SDL_RenderClear(a->ren);
 
     SDL_FRect dst = to_screen(a, 0, 0, (float)a->doc.canvas.w, (float)a->doc.canvas.h);
@@ -1367,8 +1406,7 @@ static int selftest_picker(app_t *a)
 
 int cm_gui_main(int argc, char **argv)
 {
-    static app_t app; /* zero-initialised */
-    app_t *a = &app;
+    app_t *a = &g_app;
     const char *pos[2] = {NULL, NULL}, *selftest_out = NULL;
     bool selftest_pick = false, pictures = false;
     int npos = 0;
@@ -1474,3 +1512,169 @@ done:
     if (a->font) pm_font_free(a->font);
     return rc;
 }
+
+/* --------------------------------------------------------------------- web */
+
+#ifdef __EMSCRIPTEN__
+/*
+ * The browser build. The page (the cropmark-ai repository) loads this file compiled
+ * with Emscripten and calls the cm_web_* functions below. Nothing here is compiled
+ * into the desktop program.
+ *
+ * Differences from the desktop loop in cm_gui_main:
+ *   - There is no picker: Open asks the page for a file (Module.cmOpenRequested), and
+ *     the page hands it over through cm_web_open.
+ *   - Save writes the file as usual, then tells the page (Module.cmSaved), which turns
+ *     it into a download. Sessions are off.
+ *   - The loop is driven by the browser and pauses itself whenever a frame had nothing
+ *     to do. The page calls cm_web_wake on input, so an idle editor does no work.
+ */
+static bool web_ready, web_loop, web_paused, web_redraw;
+
+static void web_request_open(void)
+{
+    EM_ASM({ if (Module.cmOpenRequested) Module.cmOpenRequested(); });
+}
+
+static void web_saved(const char *path)
+{
+    EM_ASM({ if (Module.cmSaved) Module.cmSaved(UTF8ToString($0)); }, path);
+}
+
+EMSCRIPTEN_KEEPALIVE void cm_web_wake(void)
+{
+    if (web_loop && web_paused) {
+        web_paused = false;
+        emscripten_resume_main_loop();
+    }
+}
+
+static void web_frame(void)
+{
+    static bool was_timed;
+    app_t *a = &g_app;
+    SDL_Event e;
+    bool any = web_redraw;
+    web_redraw = false;
+    while (SDL_PollEvent(&e)) { dispatch(a, &e); any = true; }
+    /* a status message with a time limit: one more frame when it runs out */
+    bool timed = a->status[0] && a->status_until != 0xFFFFFFFFu && SDL_GetTicks() < a->status_until;
+    if (any || timed != was_timed) draw(a);
+    was_timed = timed;
+    if (!any && !timed) {
+        web_paused = true;
+        emscripten_pause_main_loop();
+    }
+}
+
+/* Opens the picture at path (in Emscripten's file system) in place of the current
+ * one. The first call also makes the window, on the page's <canvas id="canvas">,
+ * at the size CSS gives that element. Returns 0, a pm_status, or -1 if the window
+ * cannot be made. On failure the picture that was open stays open. */
+EMSCRIPTEN_KEEPALIVE int cm_web_open(const char *path)
+{
+    app_t *a = &g_app;
+    if (!web_ready) {
+        a->sessions = false;
+        pm_font *f;
+        if (pm_font_load_default(&f) == PM_OK) a->font = f;
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) return -1;
+        SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+        /* keys go to the editor only while its canvas has the focus */
+        SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+        /* The page sizes the canvas with CSS. SDL follows a CSS-sized canvas, now and
+         * on every resize, only if the size asked for here differs from the CSS size;
+         * so ask for one pixel more. */
+        double w = 0, h = 0;
+        emscripten_get_element_css_size("#canvas", &w, &h);
+        a->win = SDL_CreateWindow("cropmark", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                                  (int)w + 1, (int)h + 1, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        if (a->win) a->ren = SDL_CreateRenderer(a->win, -1, 0);
+        if (!a->win || !a->ren) return -1;
+        SDL_StopTextInput();
+        update_dpi(a);
+        a->running = true;
+        web_ready = true;
+    }
+    pm_status st = open_document(a, path, NULL);
+    if (st != PM_OK) return (int)st;
+    update_dpi(a);
+    fit_view(a);
+    a->ui_dirty = true;
+    web_redraw = true;
+    if (!web_loop) {
+        web_loop = true;
+        emscripten_set_main_loop(web_frame, 0, 0);
+    }
+    cm_web_wake();
+    return 0;
+}
+
+/* The message for a result of cm_web_open. */
+EMSCRIPTEN_KEEPALIVE const char *cm_web_strerror(int status)
+{
+    return status < 0 ? "the editor window could not be created" : pm_strerror((pm_status)status);
+}
+
+/* The format the next save writes: PNG (0) or JPEG (1). This is the choice the desktop
+ * program takes from the OUTPUT name on its command line. Opening a picture sets it
+ * back to PNG. */
+EMSCRIPTEN_KEEPALIVE void cm_web_set_format(int jpeg)
+{
+    app_t *a = &g_app;
+    if (!a->have_doc) return;
+    char path[CM_PATH];
+    with_ext(path, sizeof path, a->out_path, jpeg ? ".jpg" : ".png");
+    if (strcmp(path, a->out_path) != 0) {
+        snprintf(a->out_path, sizeof a->out_path, "%s", path);
+        a->out_confirmed = false;
+    }
+    a->ui_dirty = true;
+    web_redraw = true;
+    cm_web_wake();
+}
+
+/* Unsaved edits? (The page warns before the tab is closed.) */
+EMSCRIPTEN_KEEPALIVE int cm_web_modified(void)
+{
+    return g_app.have_doc && g_app.modified;
+}
+
+/* The page's colours, as 0xRRGGBB: the area around the photo, the toolbar and status
+ * bar, a button, the selected button, text, text on the selected button, disabled
+ * text, and the text of a prompt. */
+EMSCRIPTEN_KEEPALIVE void cm_web_set_palette(unsigned canvas, unsigned bar, unsigned btn, unsigned on,
+                                             unsigned txt, unsigned on_txt, unsigned dim, unsigned warn)
+{
+#define RGB(v) ((pm_color){(uint8_t)((v) >> 16), (uint8_t)((v) >> 8), (uint8_t)(v), 0xff})
+    ui.canvas = RGB(canvas);
+    ui.bg = RGB(bar);
+    ui.btn = RGB(btn);
+    ui.on = RGB(on);
+    ui.txt = RGB(txt);
+    ui.on_txt = RGB(on_txt);
+    ui.dim = RGB(dim);
+    ui.warn = RGB(warn);
+#undef RGB
+    g_app.ui_dirty = true;
+    web_redraw = true;
+    cm_web_wake();
+}
+
+/* The view, for the page's tests: 0 zoom, 1 pan x, 2 pan y, 3 renderer pixels per CSS
+ * pixel, 4 and 5 the picture's width and height, 6 the toolbar's height. */
+EMSCRIPTEN_KEEPALIVE double cm_web_view(int what)
+{
+    const app_t *a = &g_app;
+    switch (what) {
+    case 0: return a->zoom;
+    case 1: return a->pan_x;
+    case 2: return a->pan_y;
+    case 3: return a->dpi;
+    case 4: return a->have_doc ? a->doc.canvas.w : 0;
+    case 5: return a->have_doc ? a->doc.canvas.h : 0;
+    case 6: return a->tb_h;
+    default: return 0;
+    }
+}
+#endif /* __EMSCRIPTEN__ */

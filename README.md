@@ -388,6 +388,15 @@ it names the core (`libpmark`, `pmark.h`, the `pm_` prefix), session files
 covers the design: data model, rendering, the session format, input limits,
 the persistence rules and the roadmap.
 
+## Web version
+
+cropmark also runs in the browser. The web version lives in
+[wmahaney/cropmark-ai](https://github.com/wmahaney/cropmark-ai) and is built from this
+repository, which it includes as a submodule: it is this editor, `gui/gui.c`, compiled
+with Emscripten on top of the same core. The code only the browser uses is the last
+section of `gui/gui.c`, inside `#ifdef __EMSCRIPTEN__`; none of it is compiled into the
+desktop program. The picture picker and sessions are not part of the web version.
+
 ## Known limitations
 
 - Committed edits can't be selected or moved; use undo instead.

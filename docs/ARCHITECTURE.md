@@ -449,3 +449,24 @@ by default. `make headless` builds `build/cropmark-headless` without SDL2.
 6. Opt-in EXIF date copying.
 7. Linear-light blending, and colour conversion when exporting to sRGB.
 8. Tiled textures for images larger than the GPU texture limit.
+
+## The browser build
+
+The web version (the `cropmark-ai` repository) compiles `gui/gui.c` and the core with
+Emscripten and SDL2's Emscripten port; the picker is replaced by a stub there. What the
+browser needs from this repository is the `web` section at the end of `gui/gui.c`,
+inside `#ifdef __EMSCRIPTEN__`:
+
+- `cm_web_open(path)` opens a picture the page wrote into Emscripten's file system. The
+  first call creates the window on the page's canvas.
+- **Open** in the toolbar and `Ctrl+O` call `Module.cmOpenRequested()` instead of
+  showing the picker. A successful save calls `Module.cmSaved(path)`.
+- The loop: `web_frame` drains SDL's events, draws if there were any (or a timed status
+  message just ran out), and otherwise pauses itself with
+  `emscripten_pause_main_loop`. The page calls `cm_web_wake` on input.
+- `cm_web_set_palette` replaces the toolbar's colours, which are one table (`ui`) with
+  the desktop colours as its initial value.
+
+Two things in shared code exist for it: that colour table, and `#ifndef PM_MAX_PIXELS`
+in `pmark.h`, which lets a build lower the size limit. Neither changes the desktop
+program.

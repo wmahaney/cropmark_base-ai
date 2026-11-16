@@ -57,7 +57,9 @@ typedef struct {
 /* Limits, checked from the file header before any pixel is decoded, so an
  * oversized or hostile file costs nothing. 128 MP is 512 MB per RGBA copy. */
 #define PM_MAX_DIM    32768
+#ifndef PM_MAX_PIXELS /* a build may lower it: the web version uses 32 MP */
 #define PM_MAX_PIXELS (128u * 1024u * 1024u)
+#endif
 
 /* Metadata carried from input to output. Only the ICC colour profile is
  * kept; EXIF is deliberately dropped (see docs/ARCHITECTURE.md, Persistence). */
