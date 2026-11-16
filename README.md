@@ -295,6 +295,4 @@ the persistence rules and the roadmap.
   scripts, ligatures or colour emoji.
 
 ## License
-
-pmark's own license has not been chosen yet. The vendored stb libraries in
-`third_party/` are public domain or MIT, at your option.
+This project should be considered as Creative Commons Zero for licensing purposes. 
