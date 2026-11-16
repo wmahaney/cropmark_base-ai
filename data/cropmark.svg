@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3a63c8"/>
+      <stop offset="1" stop-color="#d9798a"/>
+    </linearGradient>
+    <clipPath id="photo">
+      <rect x="52" y="64" width="152" height="120" rx="6"/>
+    </clipPath>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="#26262a"/>
+  <g clip-path="url(#photo)">
+    <rect x="52" y="64" width="152" height="120" fill="url(#sky)"/>
+    <circle cx="164" cy="98" r="18" fill="#fbd977"/>
+    <path d="M40 184 L100 120 L150 184 Z" fill="#3c7a48"/>
+    <path d="M112 184 L164 136 L216 184 Z" fill="#2e5e3c"/>
+  </g>
+  <!-- crop marks -->
+  <path d="M40 98 V52 H86 M216 150 V196 H170" fill="none" stroke="#ffffff"
+        stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- marker -->
+  <path d="M74 162 C98 140 126 176 176 146" fill="none" stroke="#e53935"
+        stroke-width="11" stroke-linecap="round"/>
+</svg>

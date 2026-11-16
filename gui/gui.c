@@ -1,5 +1,5 @@
 /*
- * pmark-gui -- interactive SDL2 frontend.
+ * cropmark's window: the picture picker (gui/picker.c) and the editor.
  *
  * This file owns the window, input, toolbar and view transform. Every pixel
  * that ends up in the saved file is produced by the core: pm_doc_* commits,
@@ -9,7 +9,8 @@
  *   M marker  H highlighter  A arrow  B box  E ellipse  C crop  T text
  *   1-8 colour   [ ] size   O text outline   0 fit   wheel zoom
  *   middle-drag / space-drag pan     Ctrl+Z undo   Ctrl+Y / Ctrl+Shift+Z redo
- *   Ctrl+S save    Ctrl+Shift+S save as    Esc cancel
+ *   Ctrl+S save    Ctrl+Shift+S save as    Ctrl+O open another picture
+ *   Esc cancel
  *   crop: drag, then Enter      text: click, type, Enter (Shift+Enter = newline);
  *         drag the box to move it before committing
  */
@@ -21,7 +22,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cropmark.h"
+#include "picker.h"
 #include "pmark.h"
+
+#define CM_PATH 4096
 
 typedef enum { T_MARKER, T_HIGHLIGHT, T_ARROW, T_RECT, T_ELLIPSE, T_CROP, T_TEXT, T__N } tool_kind;
 static const char *const TOOL_NAME[T__N] = {"Marker", "Highlight", "Arrow", "Box", "Ellipse", "Crop", "Text"};
@@ -33,7 +38,7 @@ static const pm_color PALETTE[8] = {
     {0x00, 0x00, 0x00, 0xff}, {0xff, 0xff, 0xff, 0xff},
 };
 
-typedef enum { A_TOOL, A_COLOR, A_SMALLER, A_BIGGER, A_OUTLINE, A_UNDO, A_REDO, A_SAVE, A_SAVE_AS } act_kind;
+typedef enum { A_OPEN, A_TOOL, A_COLOR, A_SMALLER, A_BIGGER, A_OUTLINE, A_UNDO, A_REDO, A_SAVE, A_SAVE_AS } act_kind;
 typedef struct { pm_rect r; act_kind kind; int arg; } button;
 
 typedef enum { P_NONE, P_SAVE_AS, P_CONFIRM } prompt_kind;
@@ -51,7 +56,9 @@ typedef struct {
     int    n_buttons;
 
     pm_doc   doc;
-    pm_font *font; /* owned by doc; NULL disables text tool and labels */
+    bool     have_doc;
+    pm_font *font; /* owned by the app; NULL disables text tool and labels */
+    picker  *pk;   /* non-NULL while the picker is showing */
 
     float zoom, pan_x, pan_y; /* screen = image * zoom + pan (renderer pixels) */
 
@@ -82,11 +89,12 @@ typedef struct {
     pm_rect preview; /* texture region currently showing uncommitted pixels */
 
     /* saving */
-    char in_path[1024], out_path[1024];
+    char in_path[CM_PATH], out_path[CM_PATH];
     int  quality;
     bool sessions;      /* write OUTPUT.pmark next to OUTPUT on save */
     bool out_confirmed; /* out_path is ours to overwrite without asking */
     bool modified, running, quit_armed;
+    bool open_armed, armed_now; /* Ctrl+O with unsaved edits: asked once */
     prompt_kind prompt;
     char prompt_buf[1024];
     size_t prompt_len;
@@ -110,7 +118,7 @@ static bool report(app_t *a, const char *what, pm_status st)
 {
     if (st == PM_OK) return true;
     set_status(a, 6000, "%s: %s", what, pm_strerror(st));
-    fprintf(stderr, "pmark-gui: %s: %s\n", what, pm_strerror(st));
+    fprintf(stderr, "cropmark: %s: %s\n", what, pm_strerror(st));
     return false;
 }
 
@@ -189,7 +197,7 @@ static bool tex_sync(app_t *a)
         a->tex = SDL_CreateTexture(a->ren, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
                                    a->doc.canvas.w, a->doc.canvas.h);
         if (!a->tex) {
-            fprintf(stderr, "pmark-gui: texture %dx%d: %s\n", a->doc.canvas.w,
+            fprintf(stderr, "cropmark: texture %dx%d: %s\n", a->doc.canvas.w,
                     a->doc.canvas.h, SDL_GetError());
             return false;
         }
@@ -497,7 +505,7 @@ static void prompt_open(app_t *a, prompt_kind k, const char *initial);
 
 static void save_as_open(app_t *a)
 {
-    char stem[1024];
+    char stem[CM_PATH];
     with_ext(stem, sizeof stem, a->out_path, "");
     prompt_open(a, P_SAVE_AS, stem);
 }
@@ -524,7 +532,7 @@ static void prompt_close(app_t *a)
 static void save(app_t *a, bool confirmed)
 {
     cancel_pending(a);
-    char side[1100];
+    char side[CM_PATH + 8];
     sidecar_path(a, side, sizeof side);
     bool replaces_input = a->doc.base_path && pm_path_same_file(a->out_path, a->doc.base_path);
     bool want_session = a->sessions && a->doc.base_path && !replaces_input;
@@ -557,7 +565,7 @@ static void save(app_t *a, bool confirmed)
     else
         set_status(a, 4000, "Saved %s (%dx%d)%s%s", base_name(a->out_path), a->doc.canvas.w,
                    a->doc.canvas.h, sess_ok ? " + " : "", sess_ok ? base_name(side) : "");
-    fprintf(stderr, "pmark-gui: saved %s\n", a->out_path);
+    fprintf(stderr, "cropmark: saved %s\n", a->out_path);
 }
 
 static void prompt_submit(app_t *a)
@@ -583,7 +591,7 @@ static void prompt_submit(app_t *a)
         set_status(a, 5000, "Type a file name");
         return;
     }
-    char path[1100];
+    char path[CM_PATH + 16];
     int len = snprintf(path, sizeof path, "%s%s", name, out_ext(a));
     if (len < 0 || (size_t)len >= sizeof a->out_path) {
         set_status(a, 5000, "That name is too long");
@@ -595,6 +603,91 @@ static void prompt_submit(app_t *a)
         a->out_confirmed = false;
     }
     save(a, false);
+}
+
+/* ------------------------------------------------- documents and picker */
+
+/* Opens a photo or .pmark session in place of the current document; out
+ * NULL derives OUTPUT from the input's name. On failure nothing changes.
+ * Works before the window exists (the texture is made once it does). */
+static pm_status open_document(app_t *a, const char *path, const char *out)
+{
+    pm_doc nd;
+    pm_status st, warn = PM_OK;
+    bool is_session = pm_is_session_file(path);
+    if (is_session) {
+        st = pm_session_load(&nd, path, 0);
+        if (st == PM_ERR_STALE || st == PM_ERR_FONT) { /* open it, but say so */
+            warn = st;
+            st = pm_session_load(&nd, path, PM_SESSION_LENIENT);
+        }
+    } else {
+        st = pm_doc_open(&nd, path);
+    }
+    if (st != PM_OK) return st;
+
+    cancel_pending(a);
+    if (a->have_doc) pm_doc_close(&a->doc);
+    a->doc = nd;
+    a->have_doc = true;
+    snprintf(a->in_path, sizeof a->in_path, "%s", path);
+    if (out) snprintf(a->out_path, sizeof a->out_path, "%s", out);
+    else with_ext(a->out_path, sizeof a->out_path, a->in_path, is_session ? ".png" : "-marked.png");
+    a->out_confirmed = a->modified = a->quit_armed = a->open_armed = false;
+
+    /* scale default sizes to the photo so they are usable on 12 MP shots */
+    float ref = (float)(a->doc.canvas.w > a->doc.canvas.h ? a->doc.canvas.w : a->doc.canvas.h);
+    a->line_w = fmaxf(3.0f, roundf(ref / 160.0f));
+    a->ts = (pm_text_style){fmaxf(16.0f, roundf(ref / 28.0f)), PALETTE[0], 0, PALETTE[6]};
+    a->status[0] = 0;
+    if (warn != PM_OK) set_status(a, 8000, "Warning: %s; opened anyway", pm_strerror(warn));
+    if (a->ren) {
+        if (!tex_sync(a)) { a->running = false; return PM_ERR_NOMEM; }
+        fit_view(a);
+    }
+    a->ui_dirty = true;
+    return PM_OK;
+}
+
+/* Shows the picker in dir (NULL: the open photo's folder, else the current
+ * folder). With unsaved edits the first request only warns; the edits are
+ * dropped only when another picture is actually opened. */
+static void enter_picker(app_t *a, const char *dir)
+{
+    if (a->pk) return;
+    if (a->have_doc && a->modified && !a->open_armed) {
+        a->open_armed = a->armed_now = true;
+        a->ui_dirty = true;
+        return;
+    }
+    cancel_pending(a);
+    char here[CM_PATH] = ".";
+    if (!dir && a->have_doc) {
+        snprintf(here, sizeof here, "%s", a->in_path);
+        char *slash = strrchr(here, '/');
+        if (!slash) snprintf(here, sizeof here, ".");
+        else if (slash == here) slash[1] = 0;
+        else *slash = 0;
+        dir = here;
+    }
+    a->pk = picker_new(a->ren, a->font, dir ? dir : ".");
+    if (!a->pk && dir && strcmp(dir, ".")) a->pk = picker_new(a->ren, a->font, ".");
+    if (!a->pk) {
+        if (a->have_doc) set_status(a, 6000, "Cannot list the folder");
+        return;
+    }
+    a->open_armed = false;
+    SDL_StartTextInput(); /* typing filters the pictures */
+    SDL_SetWindowTitle(a->win, "Open a picture - cropmark");
+}
+
+static void leave_picker(app_t *a)
+{
+    picker_free(a->pk);
+    a->pk = NULL;
+    SDL_StopTextInput();
+    update_dpi(a);
+    a->ui_dirty = true;
 }
 
 /* ---------------------------------------------------------------- toolbar */
@@ -644,6 +737,8 @@ static void build_toolbar(app_t *a, int ww)
     if (pm_image_create(&im, ww, a->tb_h, UI_BG) != PM_OK) return;
     a->n_buttons = 0;
     int x = (int)(8 * a->dpi), m = (int)(6 * a->dpi);
+    add_button(a, &im, &x, "Open", A_OPEN, 0, false, true);
+    gap(a, &x);
     for (int t = 0; t < T__N; t++)
         add_button(a, &im, &x, TOOL_NAME[t], A_TOOL, t, (int)a->tool == t, t != T_TEXT || a->font);
     gap(a, &x);
@@ -678,11 +773,14 @@ static void build_toolbar(app_t *a, int ww)
 
 static void build_bar(app_t *a, int ww)
 {
-    char line[2400];
+    char line[2 * CM_PATH + 512];
     if (a->prompt == P_SAVE_AS)
         snprintf(line, sizeof line, "Save as: %s|%s   (Enter save, Esc cancel)", a->prompt_buf, out_ext(a));
     else if (a->quit_armed)
         snprintf(line, sizeof line, "Unsaved changes. Ctrl+S saves; close again to discard them");
+    else if (a->open_armed)
+        snprintf(line, sizeof line, "Unsaved changes. Ctrl+S saves; Open again to pick another picture "
+                                    "(the changes are dropped only once you open one)");
     else if (a->status[0] && SDL_GetTicks() < a->status_until)
         snprintf(line, sizeof line, "%s", a->status);
     else
@@ -705,6 +803,7 @@ static void toolbar_click(app_t *a, float x, float y)
         const button *b = &a->buttons[i];
         if (!in_rect(b->r, (pm_point){x, y})) continue;
         switch (b->kind) {
+        case A_OPEN:    enter_picker(a, NULL); break;
         case A_TOOL:    set_tool(a, (tool_kind)b->arg); break;
         case A_COLOR:   a->color_idx = b->arg; if (a->typing) text_preview(a); break;
         case A_SMALLER: resize(a, false); break;
@@ -744,6 +843,7 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
         } else if (sym == SDLK_ESCAPE) text_end(a, false);
         else if (sym == SDLK_BACKSPACE) { utf8_pop(a->text, &a->text_len); text_preview(a); }
         else if (ctrl && sym == SDLK_s) { text_end(a, true); save(a, false); }
+        else if (ctrl && sym == SDLK_o) { text_end(a, true); enter_picker(a, NULL); }
         return;
     }
     if (ctrl) {
@@ -751,6 +851,7 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
         else if (sym == SDLK_y) history(a, true);
         else if (sym == SDLK_s && shift) save_as_open(a);
         else if (sym == SDLK_s) save(a, false);
+        else if (sym == SDLK_o) enter_picker(a, NULL);
         return;
     }
     for (int t = 0; t < T__N; t++)
@@ -885,6 +986,47 @@ static void handle_event(app_t *a, const SDL_Event *e)
     }
     if (a->quit_armed) a->ui_dirty = true;
     a->quit_armed = false;
+    if (a->open_armed && !a->armed_now) { a->open_armed = false; a->ui_dirty = true; }
+    a->armed_now = false;
+}
+
+/* Events while the picker shows. Esc leaves it (or quits, if no picture is
+ * open yet); choosing a picture opens it in the editor. */
+static void picker_dispatch(app_t *a, const SDL_Event *e)
+{
+    if (e->type == SDL_QUIT) {
+        if (a->have_doc && a->modified && !a->quit_armed) {
+            a->quit_armed = true;
+            picker_set_status(a->pk, "Unsaved changes in %s. Close again to discard them, "
+                              "or Esc to go back to them", base_name(a->in_path));
+        } else {
+            a->running = false;
+        }
+        return;
+    }
+    if (e->type == SDL_WINDOWEVENT && e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) update_dpi(a);
+    switch (picker_event(a->pk, e)) {
+    case PICK_CANCEL:
+        if (a->have_doc) leave_picker(a);
+        else a->running = false;
+        break;
+    case PICK_OPEN: {
+        char path[CM_PATH];
+        snprintf(path, sizeof path, "%s", picker_choice(a->pk));
+        pm_status st = open_document(a, path, NULL);
+        if (st == PM_OK) leave_picker(a);
+        else if (a->running) picker_set_status(a->pk, "%s: %s", base_name(path), pm_strerror(st));
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void dispatch(app_t *a, const SDL_Event *e)
+{
+    if (a->pk) picker_dispatch(a, e);
+    else handle_event(a, e);
 }
 
 /* ------------------------------------------------------------------ render */
@@ -940,9 +1082,20 @@ static void render(app_t *a)
 
 static void update_title(app_t *a)
 {
-    char buf[1200];
-    snprintf(buf, sizeof buf, "%s%s - pmark", a->modified ? "* " : "", base_name(a->in_path));
+    char buf[CM_PATH + 32];
+    snprintf(buf, sizeof buf, "%s%s - cropmark", a->modified ? "* " : "", base_name(a->in_path));
     SDL_SetWindowTitle(a->win, buf);
+}
+
+/* Draws whichever of picker and editor is showing. */
+static void draw(app_t *a)
+{
+    if (a->pk) {
+        picker_render(a->pk, a->dpi);
+    } else {
+        update_title(a);
+        render(a);
+    }
 }
 
 /* ---------------------------------------------------------------- selftest */
@@ -950,7 +1103,7 @@ static void update_title(app_t *a)
 /* Drives the real event handlers with synthetic input (no display needed:
  * run with SDL_VIDEODRIVER=dummy). Coordinates are fractions of the canvas,
  * converted through the live view transform as a user's clicks would be. */
-static void st_send(app_t *a, SDL_Event *e) { handle_event(a, e); render(a); }
+static void st_send(app_t *a, SDL_Event *e) { dispatch(a, e); draw(a); }
 
 static void st_mouse(app_t *a, Uint32 type, float fx, float fy)
 {
@@ -984,13 +1137,23 @@ static void st_key(app_t *a, SDL_Keycode sym, Uint16 mod)
     st_send(a, &e);
 }
 
+/* One SDL_TEXTINPUT event holds at most 31 bytes, so longer text arrives
+ * as several events, split between UTF-8 characters, as SDL itself does. */
 static void st_type(app_t *a, const char *s)
 {
-    SDL_Event e;
-    memset(&e, 0, sizeof e);
-    e.type = SDL_TEXTINPUT;
-    snprintf(e.text.text, sizeof e.text.text, "%s", s);
-    st_send(a, &e);
+    while (*s) {
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_TEXTINPUT;
+        size_t n = strlen(s), max = sizeof e.text.text - 1;
+        if (n > max) {
+            n = max;
+            while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+        }
+        memcpy(e.text.text, s, n);
+        st_send(a, &e);
+        s += n;
+    }
 }
 
 static bool st_click_button(app_t *a, act_kind k, int arg)
@@ -1090,7 +1253,7 @@ static int selftest(app_t *a, const char *save_as)
     st_key(a, SDLK_ESCAPE, 0);
     ST_CHECK(a->prompt == P_NONE);
     /* optional screenshot of the final frame, for eyeballing the UI */
-    const char *shot = getenv("PMARK_SELFTEST_SHOT");
+    const char *shot = getenv("CROPMARK_SELFTEST_SHOT");
     if (shot) {
         int ww, wh;
         SDL_GetRendererOutputSize(a->ren, &ww, &wh);
@@ -1105,107 +1268,200 @@ static int selftest(app_t *a, const char *save_as)
     return 0;
 }
 
-/* -------------------------------------------------------------------- main */
-
-static void usage(void)
+/* Runs a naked `cropmark` in a prepared folder (see the Makefile's test
+ * target): photo.png, other.jpg (EXIF-rotated), broken.png (not an image),
+ * notes.txt, .hidden.png and sub/inner.png. */
+static void st_shot(app_t *a, const char *env)
 {
-    fprintf(stderr,
-"usage: pmark-gui INPUT [OUTPUT] [--quality N] [--no-session]\n"
-"  INPUT is a photo or a .pmark session. OUTPUT defaults to INPUT-marked.png\n"
-"  (for a session, the session's name with .png). Ctrl+S saves OUTPUT and,\n"
-"  unless --no-session, OUTPUT.pmark next to it so the edit can be reopened.\n");
+    const char *shot = getenv(env);
+    int ww, wh;
+    pm_image im;
+    if (!shot) return;
+    SDL_GetRendererOutputSize(a->ren, &ww, &wh);
+    if (pm_image_create(&im, ww, wh, (pm_color){0, 0, 0, 255}) != PM_OK) return;
+    if (SDL_RenderReadPixels(a->ren, NULL, SDL_PIXELFORMAT_RGBA32, im.px, ww * 4) == 0)
+        pm_image_save(&im, shot, 0);
+    pm_image_free(&im);
 }
 
-int main(int argc, char **argv)
+static bool st_is(const char *got, const char *want) { return got && !strcmp(got, want); }
+
+/* Runs the event loop until `want` thumbnails are in, or none have arrived
+ * for a second (want == 0), or 20 s pass. */
+static void st_wait_thumbs(app_t *a, size_t want)
+{
+    size_t last = 0;
+    Uint32 t0 = SDL_GetTicks(), quiet = t0;
+    while (SDL_GetTicks() - t0 < 20000) {
+        size_t got = picker_thumbs_done(a->pk);
+        if (want ? got >= want : SDL_GetTicks() - quiet > 1000) break;
+        if (got != last) { last = got; quiet = SDL_GetTicks(); }
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) dispatch(a, &e);
+        draw(a);
+        SDL_Delay(5);
+    }
+    draw(a);
+}
+
+static int selftest_picker(app_t *a)
+{
+    ST_CHECK(a->pk && !a->have_doc);
+    draw(a);
+    if (getenv("CROPMARK_PICKER_SHOT")) { /* screenshot only, of any folder */
+        st_wait_thumbs(a, 0);
+        st_shot(a, "CROPMARK_PICKER_SHOT");
+        return 0;
+    }
+    /* the current folder: "..", sub/, then the pictures; the first picture is selected */
+    ST_CHECK(picker_shown(a->pk) == 5 && st_is(picker_selected(a->pk), "broken.png"));
+    /* thumbnails arrive from the worker thread (the broken one fails quietly) */
+    st_wait_thumbs(a, 2);
+    ST_CHECK(picker_thumbs_done(a->pk) == 2);
+
+    st_type(a, "PHO");                                         /* filter, any case     */
+    ST_CHECK(picker_shown(a->pk) == 1 && st_is(picker_selected(a->pk), "photo.png"));
+    st_key(a, SDLK_ESCAPE, 0);                                 /* clears the filter    */
+    ST_CHECK(a->pk && picker_shown(a->pk) == 5);
+    st_type(a, "sub");                                         /* into a folder ...    */
+    st_key(a, SDLK_RETURN, 0);
+    ST_CHECK(strstr(picker_dir(a->pk), "/sub") && picker_shown(a->pk) == 2 &&
+             st_is(picker_selected(a->pk), "inner.png"));
+    st_key(a, SDLK_BACKSPACE, 0);                              /* ... and back out     */
+    ST_CHECK(!strstr(picker_dir(a->pk), "/sub") && st_is(picker_selected(a->pk), "sub"));
+
+    st_key(a, SDLK_RIGHT, 0); st_key(a, SDLK_RIGHT, 0);        /* sub -> broken -> other */
+    ST_CHECK(st_is(picker_selected(a->pk), "other.jpg"));
+    st_key(a, SDLK_RETURN, 0);                                 /* opens the editor     */
+    ST_CHECK(!a->pk && a->have_doc && a->doc.canvas.w == 480 && a->doc.canvas.h == 320);
+    ST_CHECK(strstr(a->out_path, "other-marked.png") != NULL);
+
+    st_drag(a, 0.2f, 0.2f, 0.6f, 0.6f);                        /* an unsaved edit      */
+    ST_CHECK(a->modified);
+    st_key(a, SDLK_o, KMOD_CTRL);                              /* first Ctrl+O warns   */
+    ST_CHECK(!a->pk && a->open_armed);
+    st_key(a, SDLK_o, KMOD_CTRL);                              /* second shows picker  */
+    ST_CHECK(a->pk && st_is(picker_selected(a->pk), "broken.png"));
+    st_key(a, SDLK_ESCAPE, 0);                                 /* Esc: edit still there */
+    ST_CHECK(!a->pk && a->modified && a->doc.n_applied == 1);
+
+    st_key(a, SDLK_o, KMOD_CTRL); st_key(a, SDLK_o, KMOD_CTRL);
+    st_type(a, "broken");                                      /* unreadable: stays    */
+    st_key(a, SDLK_RETURN, 0);
+    ST_CHECK(a->pk && a->modified && strstr(a->in_path, "other.jpg"));
+    st_key(a, SDLK_ESCAPE, 0);
+    st_type(a, "photo");                                       /* another picture      */
+    st_key(a, SDLK_RETURN, 0);
+    ST_CHECK(!a->pk && !a->modified && strstr(a->in_path, "photo.png") && a->doc.n_applied == 0);
+
+    ST_CHECK(st_click_button(a, A_OPEN, 0) && a->pk);          /* toolbar Open; no edits */
+    st_type(a, "sub/inner.png");                               /* a typed path         */
+    st_key(a, SDLK_RETURN, 0);
+    ST_CHECK(!a->pk && strstr(a->in_path, "sub/inner.png"));
+    st_shot(a, "CROPMARK_SELFTEST_SHOT");
+    fprintf(stderr, "picker selftest ok\n");
+    return 0;
+}
+
+/* -------------------------------------------------------------------- main */
+
+int cm_gui_main(int argc, char **argv)
 {
     static app_t app; /* zero-initialised */
     app_t *a = &app;
     const char *pos[2] = {NULL, NULL}, *selftest_out = NULL;
+    bool selftest_pick = false, pictures = false;
     int npos = 0;
     a->sessions = true;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftest_out = argv[++i];
+        else if (!strcmp(argv[i], "--selftest-picker")) selftest_pick = true;
         else if (!strcmp(argv[i], "--no-session")) a->sessions = false;
+        else if (!strcmp(argv[i], "--pictures")) pictures = true;
         else if (!strcmp(argv[i], "--quality") && i + 1 < argc) a->quality = atoi(argv[++i]);
-        else if (argv[i][0] == '-' && argv[i][1]) { usage(); return 2; }
-        else if (npos < 2) pos[npos++] = argv[i];
-    }
-    if (npos == 0) { usage(); return 2; }
-
-    snprintf(a->in_path, sizeof a->in_path, "%s", pos[0]);
-    bool is_session = pm_is_session_file(a->in_path);
-    if (pos[1]) snprintf(a->out_path, sizeof a->out_path, "%s", pos[1]);
-    else if (is_session) with_ext(a->out_path, sizeof a->out_path, a->in_path, ".png");
-    else with_ext(a->out_path, sizeof a->out_path, a->in_path, "-marked.png");
-
-    pm_status st;
-    if (is_session) {
-        st = pm_session_load(&a->doc, a->in_path, 0);
-        if (st == PM_ERR_STALE || st == PM_ERR_FONT) {
-            pm_status st2 = pm_session_load(&a->doc, a->in_path, PM_SESSION_LENIENT);
-            if (st2 == PM_OK) set_status(a, 8000, "Warning: %s; opened anyway", pm_strerror(st));
-            st = st2;
+        else if (argv[i][0] == '-' && argv[i][1]) {
+            fprintf(stderr, "cropmark: %s needs a value (see cropmark --help)\n", argv[i]);
+            return 2;
+        } else if (npos < 2) pos[npos++] = argv[i];
+        else {
+            fprintf(stderr, "cropmark: too many file names (see cropmark --help)\n");
+            return 2;
         }
-    } else {
-        st = pm_doc_open(&a->doc, a->in_path);
     }
-    if (st != PM_OK) {
-        fprintf(stderr, "pmark-gui: %s: %s\n", a->in_path, pm_strerror(st));
-        return 1;
-    }
-    if (pm_format_from_path(a->out_path) == PM_FMT_UNKNOWN) {
-        fprintf(stderr, "pmark-gui: %s: output must be .png, .jpg or .jpeg\n", a->out_path);
-        pm_doc_close(&a->doc);
+
+    bool want_picker = npos == 0 || picker_is_dir(pos[0]);
+    /* --pictures only picks where a bare picker starts, so a desktop entry
+     * can pass it together with an optional file (Exec=cropmark --pictures %f) */
+    char pictures_dir[CM_PATH];
+    if (pictures && npos == 0 && picker_pictures_dir(pictures_dir, sizeof pictures_dir))
+        pos[0] = pictures_dir;
+    if (want_picker && pos[1]) {
+        fprintf(stderr, "cropmark: %s is a folder; OUTPUT goes with a photo\n", pos[0]);
         return 2;
     }
+    if (!want_picker) { /* load before making a window, so a bad file fails fast */
+        if (pos[1] && pm_format_from_path(pos[1]) == PM_FMT_UNKNOWN) {
+            fprintf(stderr, "cropmark: %s: output must be .png, .jpg or .jpeg\n", pos[1]);
+            return 2;
+        }
+        pm_status st = open_document(a, pos[0], pos[1]);
+        if (st != PM_OK) {
+            fprintf(stderr, "cropmark: %s: %s\n", pos[0], pm_strerror(st));
+            return 1;
+        }
+        if (pm_format_from_path(a->out_path) == PM_FMT_UNKNOWN) {
+            fprintf(stderr, "cropmark: %s: output must be .png, .jpg or .jpeg\n", a->out_path);
+            pm_doc_close(&a->doc);
+            return 2;
+        }
+    }
     pm_font *f;
-    if (pm_font_load_default(&f) == PM_OK && pm_doc_own_font(&a->doc, f) == PM_OK) a->font = f;
-    else fprintf(stderr, "pmark-gui: warning: %s; text tool disabled\n", pm_strerror(PM_ERR_FONT));
-
-    /* scale default sizes to the photo so they are usable on 12 MP shots */
-    float ref = (float)(a->doc.canvas.w > a->doc.canvas.h ? a->doc.canvas.w : a->doc.canvas.h);
-    a->line_w = fmaxf(3.0f, roundf(ref / 160.0f));
-    a->ts = (pm_text_style){fmaxf(16.0f, roundf(ref / 28.0f)), PALETTE[0], 0, PALETTE[6]};
+    if (pm_font_load_default(&f) == PM_OK) a->font = f;
+    else fprintf(stderr, "cropmark: warning: %s; text tool disabled\n", pm_strerror(PM_ERR_FONT));
 
     int rc = 1;
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-        fprintf(stderr, "pmark-gui: SDL_Init: %s\n", SDL_GetError());
+        fprintf(stderr, "cropmark: SDL_Init: %s\n", SDL_GetError());
         goto done;
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-    a->win = SDL_CreateWindow("pmark", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 820,
+    a->win = SDL_CreateWindow("cropmark", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 820,
                               SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (a->win) a->ren = SDL_CreateRenderer(a->win, -1, SDL_RENDERER_PRESENTVSYNC);
     if (!a->win || !a->ren) {
-        fprintf(stderr, "pmark-gui: window: %s\n", SDL_GetError());
+        fprintf(stderr, "cropmark: window: %s\n", SDL_GetError());
         goto done;
     }
     SDL_StopTextInput(); /* SDL starts with it on; we only want it while typing */
     update_dpi(a);
-    if (!tex_sync(a)) goto done;
-    fit_view(a);
-    a->ui_dirty = true;
     a->running = true;
+    if (want_picker) {
+        enter_picker(a, pos[0]);
+        if (!a->pk) goto done; /* picker_new said why */
+    } else {
+        if (!tex_sync(a)) goto done;
+        fit_view(a);
+    }
+    a->ui_dirty = true;
 
-    if (selftest_out) {
-        render(a);
-        rc = selftest(a, selftest_out);
+    if (selftest_out || selftest_pick) {
+        draw(a);
+        rc = selftest_pick ? selftest_picker(a) : selftest(a, selftest_out);
         goto done;
     }
-    update_title(a);
-    render(a);
+    draw(a);
     while (a->running) {
         SDL_Event e;
         /* wake up at least twice a second so status messages can expire */
         if (SDL_WaitEventTimeout(&e, 500)) {
-            do handle_event(a, &e); while (SDL_PollEvent(&e)); /* drain, then draw once */
+            do dispatch(a, &e); while (a->running && SDL_PollEvent(&e)); /* drain, then draw once */
         }
-        update_title(a);
-        render(a);
+        if (a->running) draw(a);
     }
     rc = 0;
 
 done:
+    if (a->pk) picker_free(a->pk); /* joins the thumbnail thread */
     marker_finish(a, false);
     if (a->tex) SDL_DestroyTexture(a->tex);
     if (a->ui_tex) SDL_DestroyTexture(a->ui_tex);
@@ -1214,6 +1470,7 @@ done:
     if (a->win) SDL_DestroyWindow(a->win);
     SDL_Quit();
     free(a->pts);
-    pm_doc_close(&a->doc);
+    pm_doc_close(&a->doc); /* before the font: text ops borrow it */
+    if (a->font) pm_font_free(a->font);
     return rc;
 }
