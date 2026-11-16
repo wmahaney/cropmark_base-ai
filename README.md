@@ -1,7 +1,6 @@
 # pmark
 
-pmark marks up photos. It crops them, draws on them with markers,
-highlighters, arrows, boxes and ellipses, and adds text. It is a small C11
+pmark marks up photos, crops, and adds text. It is a small C11
 program with two front ends, both built on the same editing core:
 
 - **`pmark`**, a command-line tool for scripted and batch edits. It has no
@@ -47,8 +46,7 @@ make gui        # builds build/pmark-gui (needs SDL2)
 ```
 
 The image codecs and font rasteriser (stb) are vendored in `third_party/`,
-so nothing else needs installing. Windows is not yet supported: the code is
-written with Windows in mind, but it has not been built or run there.
+so nothing else needs installing.
 
 ## Quick start
 
@@ -295,4 +293,4 @@ the persistence rules and the roadmap.
   scripts, ligatures or colour emoji.
 
 ## License
-This project should be considered as Creative Commons Zero for licensing purposes. 
+This project is licensed under Creative Commons Zero license.
