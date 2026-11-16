@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=cropmark
+GenericName=Photo Markup
+Comment=Pick a photo, crop it, draw on it and add text
+Exec="@BINDIR@/cropmark" --pictures %f
+Icon=@ICON@
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=image/png;image/jpeg;
+Keywords=crop;annotate;markup;draw;highlight;arrow;text;photo;pmark;
+StartupWMClass=cropmark

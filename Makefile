@@ -1,10 +1,12 @@
-# cropmark build. Targets:
-#   make            build/cropmark: picture picker, editor window and batch
-#                   mode in one program (needs SDL2, found with pkg-config)
-#   make install    copy cropmark to $(PREFIX)/bin   (PREFIX=~/.local by default)
-#   make uninstall  remove it again
+# cropmark (pmark for short) build. Targets:
+#   make            build/cropmark: picture picker, editor window and
+#                   command-line mode in one program (needs SDL2, via pkg-config)
+#   make install    install under $(PREFIX) (~/.local by default): the program,
+#                   a `pmark` alias, and an applications-menu entry with icon
+#   make desktop-shortcut   also put a cropmark launcher on the desktop
+#   make uninstall  remove all of the above
 #   make test       unit tests, batch smoke test, golden images, window selftests
-#   make headless   build/cropmark-headless: batch mode only, no SDL2 needed
+#   make headless   build/cropmark-headless: command-line mode only, no SDL2
 #   make test-headless   the tests that need no SDL2, against cropmark-headless
 #   make asan       rebuild everything under ASan/UBSan and run the tests
 #   make fuzz-smoke      mutation-fuzz the parsers (gcc + ASan, FUZZ_ITERS=N)
@@ -26,7 +28,7 @@ HDRS     := include/pmark.h src/pm_internal.h
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
 SDL_LIBS   := $(shell pkg-config --libs sdl2 2>/dev/null)
 
-.PHONY: all install uninstall headless test test-headless asan vendor clean golden-update \
+.PHONY: all install uninstall desktop-shortcut headless test test-headless asan vendor clean golden-update \
         fuzz-smoke fuzz-libfuzzer
 all: $(B)/cropmark
 
@@ -49,7 +51,7 @@ $(B)/libpmark.a: $(CORE_OBJ)
 
 $(B)/cropmark: $(APP_SRC) $(GUI_SRC) $(B)/libpmark.a $(APP_HDRS)
 	@test -n "$(SDL_LIBS)" || { echo "SDL2 not found: install it (apt install libsdl2-dev," \
-	  "dnf install SDL2-devel, brew install sdl2), or run 'make headless' for batch mode only"; exit 1; }
+	  "dnf install SDL2-devel, brew install sdl2), or run 'make headless' for command-line mode only"; exit 1; }
 	$(CC) $(CFLAGS) $(WARN) -Icli -Igui $(SDL_CFLAGS) $(APP_SRC) $(GUI_SRC) $(B)/libpmark.a \
 	  $(SDL_LIBS) $(LDLIBS) -o $@
 
@@ -57,14 +59,42 @@ headless: $(B)/cropmark-headless
 $(B)/cropmark-headless: $(APP_SRC) $(B)/libpmark.a $(HDRS) cli/cropmark.h
 	$(CC) $(CFLAGS) $(WARN) -DCM_NO_GUI -Icli $(APP_SRC) $(B)/libpmark.a $(LDLIBS) -o $@
 
-install: $(B)/cropmark
-	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	cp $(B)/cropmark $(DESTDIR)$(PREFIX)/bin/cropmark
-	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; \
-	  *) echo "note: $(PREFIX)/bin is not on your PATH";; esac
+# --------------------------------------------------------------- install
+BINDIR  = $(PREFIX)/bin
+APPDIR  = $(PREFIX)/share/applications
+ICONDIR = $(PREFIX)/share/icons/hicolor/scalable/apps
+DESKTOP_DIR ?= $(shell xdg-user-dir DESKTOP 2>/dev/null || echo "$(HOME)/Desktop")
+
+# The menu entry names the installed program and icon by absolute path, so
+# it works even when $(BINDIR) is not on the desktop session's PATH.
+$(B)/cropmark.desktop: data/cropmark.desktop.in Makefile | $(B)
+	sed -e 's|@BINDIR@|$(BINDIR)|g' -e 's|@ICON@|$(ICONDIR)/cropmark.svg|g' $< > $@
+
+install: $(B)/cropmark $(B)/cropmark.desktop
+	mkdir -p "$(DESTDIR)$(BINDIR)" "$(DESTDIR)$(APPDIR)" "$(DESTDIR)$(ICONDIR)"
+	cp $(B)/cropmark "$(DESTDIR)$(BINDIR)/cropmark"
+	ln -sf cropmark "$(DESTDIR)$(BINDIR)/pmark"
+	cp data/cropmark.svg "$(DESTDIR)$(ICONDIR)/cropmark.svg"
+	cp $(B)/cropmark.desktop "$(DESTDIR)$(APPDIR)/cropmark.desktop"
+	@if [ -z "$(DESTDIR)" ] && command -v update-desktop-database >/dev/null; then \
+	  update-desktop-database -q "$(APPDIR)" || true; fi
+	@case ":$$PATH:" in *":$(BINDIR):"*) ;; \
+	  *) echo "note: $(BINDIR) is not on your PATH, so type its full path to run cropmark";; esac
+	@echo "Installed cropmark. It is in your applications menu;" \
+	  "'make desktop-shortcut' also puts it on the desktop."
+
+desktop-shortcut: install
+	mkdir -p "$(DESKTOP_DIR)"
+	cp $(B)/cropmark.desktop "$(DESKTOP_DIR)/cropmark.desktop"
+	chmod +x "$(DESKTOP_DIR)/cropmark.desktop"
+	@# GNOME's desktop icons only launch entries marked trusted
+	@command -v gio >/dev/null && gio set "$(DESKTOP_DIR)/cropmark.desktop" \
+	  metadata::trusted true 2>/dev/null || true
 
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/cropmark
+	rm -f "$(DESTDIR)$(BINDIR)/cropmark" "$(DESTDIR)$(BINDIR)/pmark" \
+	  "$(DESTDIR)$(APPDIR)/cropmark.desktop" "$(DESTDIR)$(ICONDIR)/cropmark.svg" \
+	  "$(DESKTOP_DIR)/cropmark.desktop"
 
 $(B)/test_core: tests/test_core.c $(B)/libpmark.a $(HDRS)
 	$(CC) $(CFLAGS) $(WARN) -Isrc $< $(B)/libpmark.a $(LDLIBS) -o $@
@@ -77,6 +107,7 @@ test: $(B)/test_core $(B)/cropmark $(B)/imgdiff
 	sh tests/cli_smoke.sh $(B)/cropmark
 	sh tests/golden.sh $(B)/cropmark $(B)/imgdiff
 	sh tests/gui_selftest.sh $(B)/cropmark
+	sh tests/install_check.sh
 
 test-headless: $(B)/test_core $(B)/cropmark-headless $(B)/imgdiff
 	$(B)/test_core

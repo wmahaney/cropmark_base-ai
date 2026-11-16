@@ -25,6 +25,22 @@ echo "not a picture" > "$P/broken.png"
 echo "notes" > "$P/notes.txt"
 (cd "$P" && "$CROPMARK" --selftest-picker)
 
+# --pictures (what the desktop entry runs): the picker starts in the
+# Pictures folder from user-dirs.dirs, else ~/Pictures, whatever the cwd
+H=$T/home
+mkdir -p "$H/.config"
+ln -s "$P" "$H/pick"
+printf '%s\n' 'XDG_PICTURES_DIR="$HOME/pick"' > "$H/.config/user-dirs.dirs"
+(cd / && HOME=$H XDG_CONFIG_HOME= "$CROPMARK" --pictures --selftest-picker)
+rm "$H/.config/user-dirs.dirs"
+ln -s "$P" "$H/Pictures"
+(cd / && HOME=$H XDG_CONFIG_HOME= "$CROPMARK" --pictures --selftest-picker)
+# ... and a file opened with the desktop entry goes straight to the editor
+mkdir "$T/e2"
+cp "$D/sample.png" "$T/e2/photo.png"
+cp "$D/sample.png" "$T/e2/photo-marked.png"
+"$CROPMARK" --pictures "$T/e2/photo.png" --selftest "$T/e2/renamed"
+
 # a folder argument opens the picker there; a missing file fails before any window
 "$CROPMARK" "$T/missing.png" 2>/dev/null && exit 1
 "$CROPMARK" "$P" "$T/out.png" 2>/dev/null && exit 1   # OUTPUT needs a photo

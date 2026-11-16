@@ -1,4 +1,4 @@
-/* cropmark batch mode: apply edits from the command line, no window.
+/* cropmark's command-line mode: apply edits from the arguments, no window.
  * Edits are applied left to right. Reached through cli/main.c when the
  * arguments contain edits or output options. */
 #include "cropmark.h"
@@ -11,7 +11,7 @@
 void cm_batch_usage(FILE *f)
 {
     fputs(
-"Batch mode: cropmark INPUT EDITS... [-o OUTPUT] [--save-session FILE.pmark]\n"
+"Command-line mode: cropmark INPUT EDITS... [-o OUTPUT] [--save-session FILE.pmark]\n"
 "\n"
 "INPUT is a .jpg/.png photo, or a .pmark session to continue editing.\n"
 "Edits run in the order given; coordinates are pixels in the image as it\n"

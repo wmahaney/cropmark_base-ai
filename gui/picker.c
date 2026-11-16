@@ -880,6 +880,46 @@ bool picker_is_dir(const char *path)
     return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+bool picker_pictures_dir(char *out, size_t cap)
+{
+    const char *home = getenv("HOME"), *xdg = getenv("XDG_CONFIG_HOME");
+    if (!home || !*home) return false;
+    char cfg[CM_PATH], line[CM_PATH], path[CM_PATH];
+    if (xdg && *xdg) snprintf(cfg, sizeof cfg, "%s/user-dirs.dirs", xdg);
+    else snprintf(cfg, sizeof cfg, "%s/.config/user-dirs.dirs", home);
+    FILE *f = fopen(cfg, "r");
+    while (f && fgets(line, sizeof line, f)) { /* XDG_PICTURES_DIR="$HOME/Pictures" */
+        const char *v = line;
+        while (*v == ' ' || *v == '\t') v++;
+        if (strncmp(v, "XDG_PICTURES_DIR=", 17) != 0) continue;
+        v += 17;
+        if (*v == '"') v++;
+        size_t n = 0;
+        if (!strncmp(v, "$HOME", 5)) {
+            int k = snprintf(path, sizeof path, "%s", home);
+            if (k < 0 || (size_t)k >= sizeof path) continue;
+            n = (size_t)k;
+            v += 5;
+        } else if (*v != '/') {
+            continue; /* the format allows only $HOME/... or absolute paths */
+        }
+        for (; *v && *v != '"' && *v != '\n' && n + 1 < sizeof path; v++) {
+            if (*v == '\\' && v[1]) v++;
+            path[n++] = *v;
+        }
+        path[n] = 0;
+        if (picker_is_dir(path)) {
+            fclose(f);
+            snprintf(out, cap, "%s", path);
+            return true;
+        }
+    }
+    if (f) fclose(f);
+    if (join(path, sizeof path, home, "Pictures") && picker_is_dir(path)) snprintf(out, cap, "%s", path);
+    else snprintf(out, cap, "%s", home);
+    return true;
+}
+
 const char *picker_choice(const picker *p) { return p->choice; }
 const char *picker_dir(const picker *p) { return p->dir; }
 size_t picker_shown(const picker *p) { return p->nview; }

@@ -47,7 +47,7 @@ cp "$D/sample.png" "$T/base.png"
 
 # choosing between the window and batch mode
 "$CROPMARK" --help | grep -q "^usage: cropmark"
-"$CROPMARK" "$D/sample.png" --help | grep -q "Batch mode"          # --help anywhere
+"$CROPMARK" "$D/sample.png" --help | grep -q "Command-line mode"          # --help anywhere
 ! "$CROPMARK" --crop 0,0,5,5 "$D/sample.png" 2>/dev/null           # photo must come first
 "$CROPMARK" "$D/sample.png" --quality 80 -o "$T/q.jpg"              # -o makes it batch
 [ "$("$CROPMARK" "$T/q.jpg" --info)" = "480x320" ]

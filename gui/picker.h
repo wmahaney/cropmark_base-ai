@@ -37,6 +37,9 @@ const char *picker_choice(const picker *p); /* full path, after PICK_OPEN */
 const char *picker_dir(const picker *p);    /* absolute path being shown */
 void        picker_set_status(picker *p, const char *fmt, ...);
 bool        picker_is_dir(const char *path);
+/* The user's Pictures folder: XDG_PICTURES_DIR from user-dirs.dirs, else
+ * ~/Pictures, else ~. False only if $HOME is unset. */
+bool        picker_pictures_dir(char *out, size_t cap);
 
 /* For the selftest. */
 size_t      picker_shown(const picker *p);    /* tiles passing the filter */

@@ -1,15 +1,13 @@
 /*
- * cropmark -- entry point. Decides between the window and batch mode:
+ * cropmark (pmark for short) -- entry point:
  *
- *   cropmark                     picture picker in the current folder
- *   cropmark FOLDER              picture picker in FOLDER
- *   cropmark PHOTO [OUTPUT]      editor window on PHOTO
+ *   cropmark                     picture picker
+ *   cropmark PHOTO               editor on PHOTO
  *   cropmark PHOTO EDITS... -o OUTPUT
- *                                batch mode: apply EDITS, no window
+ *                                command-line mode: apply EDITS, no window
  *
- * Any option other than the window's own (--quality, --no-session) means
- * batch mode, so every command line that worked with the old `pmark` CLI
- * behaves the same here.
+ * Any option other than the window's own (--pictures, --quality,
+ * --no-session) selects command-line mode.
  */
 #include "cropmark.h"
 
@@ -20,16 +18,20 @@
 static void usage(FILE *f)
 {
     fputs(
-"usage: cropmark                       pick a picture in this folder, then edit it\n"
-"       cropmark FOLDER                pick a picture in FOLDER\n"
-"       cropmark PHOTO [OUTPUT]        edit PHOTO (.jpg/.png, or a .pmark session)\n"
-"                [--quality N] [--no-session]\n"
-"       cropmark PHOTO EDITS... -o OUTPUT\n"
-"                                      apply EDITS without opening a window\n"
+"cropmark " CROPMARK_VERSION " -- crop photos, draw on them, add text\n"
 "\n"
-"In the window, Ctrl+S saves OUTPUT (default PHOTO-marked.png) and, unless\n"
-"--no-session, OUTPUT.pmark next to it so the edit can be reopened.\n"
-"Ctrl+O goes back to the picker.\n"
+"usage: cropmark              pick a picture (in this folder), then edit it\n"
+"       cropmark PHOTO        edit PHOTO (.jpg, .png, or a .pmark session)\n"
+"\n"
+"Window options:\n"
+"  cropmark FOLDER            start the picker in FOLDER\n"
+"  --pictures                 start the picker in your Pictures folder\n"
+"  cropmark PHOTO OUTPUT      save to OUTPUT (default PHOTO-marked.png)\n"
+"  --quality N                JPEG quality of OUTPUT, 1-100 (default 92)\n"
+"  --no-session               don't write OUTPUT.pmark next to OUTPUT\n"
+"  --version                  print the version\n"
+"\n"
+"In the window: Ctrl+S saves, Ctrl+O goes back to the picker.\n"
 "\n", f);
     cm_batch_usage(f);
 }
@@ -38,16 +40,22 @@ static void usage(FILE *f)
 static bool gui_option(const char *a, bool *takes_value)
 {
     *takes_value = !strcmp(a, "--quality") || !strcmp(a, "--selftest");
-    return *takes_value || !strcmp(a, "--no-session") || !strcmp(a, "--selftest-picker");
+    return *takes_value || !strcmp(a, "--no-session") || !strcmp(a, "--pictures") ||
+           !strcmp(a, "--selftest-picker");
 }
 
 int main(int argc, char **argv)
 {
-    for (int i = 1; i < argc; i++)
+    for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(stdout);
             return 0;
         }
+        if (!strcmp(argv[i], "--version")) {
+            puts("cropmark " CROPMARK_VERSION);
+            return 0;
+        }
+    }
 
     bool batch = false;
     for (int i = 1; i < argc && !batch; i++) {
@@ -59,7 +67,7 @@ int main(int argc, char **argv)
     }
     if (batch) {
         if (argc < 2 || argv[1][0] == '-') {
-            fprintf(stderr, "cropmark: batch mode needs the photo first: "
+            fprintf(stderr, "cropmark: command-line mode needs the photo first: "
                             "cropmark PHOTO EDITS... -o OUTPUT (see --help)\n");
             return 2;
         }
@@ -67,7 +75,7 @@ int main(int argc, char **argv)
     }
 #ifdef CM_NO_GUI
     fprintf(stderr, "cropmark: this build has no window (it was built with `make headless`).\n"
-                    "Give edits and -o OUTPUT for batch mode, or see --help.\n");
+                    "Give edits and -o OUTPUT for command-line mode, or see --help.\n");
     return 2;
 #else
     return cm_gui_main(argc, argv);

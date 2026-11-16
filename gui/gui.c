@@ -1137,13 +1137,23 @@ static void st_key(app_t *a, SDL_Keycode sym, Uint16 mod)
     st_send(a, &e);
 }
 
+/* One SDL_TEXTINPUT event holds at most 31 bytes, so longer text arrives
+ * as several events, split between UTF-8 characters, as SDL itself does. */
 static void st_type(app_t *a, const char *s)
 {
-    SDL_Event e;
-    memset(&e, 0, sizeof e);
-    e.type = SDL_TEXTINPUT;
-    snprintf(e.text.text, sizeof e.text.text, "%s", s);
-    st_send(a, &e);
+    while (*s) {
+        SDL_Event e;
+        memset(&e, 0, sizeof e);
+        e.type = SDL_TEXTINPUT;
+        size_t n = strlen(s), max = sizeof e.text.text - 1;
+        if (n > max) {
+            n = max;
+            while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80) n--;
+        }
+        memcpy(e.text.text, s, n);
+        st_send(a, &e);
+        s += n;
+    }
 }
 
 static bool st_click_button(app_t *a, act_kind k, int arg)
@@ -1360,13 +1370,14 @@ int cm_gui_main(int argc, char **argv)
     static app_t app; /* zero-initialised */
     app_t *a = &app;
     const char *pos[2] = {NULL, NULL}, *selftest_out = NULL;
-    bool selftest_pick = false;
+    bool selftest_pick = false, pictures = false;
     int npos = 0;
     a->sessions = true;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--selftest") && i + 1 < argc) selftest_out = argv[++i];
         else if (!strcmp(argv[i], "--selftest-picker")) selftest_pick = true;
         else if (!strcmp(argv[i], "--no-session")) a->sessions = false;
+        else if (!strcmp(argv[i], "--pictures")) pictures = true;
         else if (!strcmp(argv[i], "--quality") && i + 1 < argc) a->quality = atoi(argv[++i]);
         else if (argv[i][0] == '-' && argv[i][1]) {
             fprintf(stderr, "cropmark: %s needs a value (see cropmark --help)\n", argv[i]);
@@ -1379,6 +1390,11 @@ int cm_gui_main(int argc, char **argv)
     }
 
     bool want_picker = npos == 0 || picker_is_dir(pos[0]);
+    /* --pictures only picks where a bare picker starts, so a desktop entry
+     * can pass it together with an optional file (Exec=cropmark --pictures %f) */
+    char pictures_dir[CM_PATH];
+    if (pictures && npos == 0 && picker_pictures_dir(pictures_dir, sizeof pictures_dir))
+        pos[0] = pictures_dir;
     if (want_picker && pos[1]) {
         fprintf(stderr, "cropmark: %s is a folder; OUTPUT goes with a photo\n", pos[0]);
         return 2;
