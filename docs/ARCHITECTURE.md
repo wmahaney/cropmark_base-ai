@@ -1,8 +1,12 @@
 # cropmark architecture
 
-cropmark (formerly pmark) opens a photo (JPEG or PNG), lets you crop it, draw on it with markers
+cropmark (`pmark` for short; version 0.3.0) opens a photo (JPEG or PNG), lets you crop it, draw on it with markers
 and shapes, and place text on it, then writes the result as PNG or JPEG. An
 edit can also be saved as a session and reopened later. It is written in C11.
+
+Versioning: until 1.0 there is no backward compatibility. Options, the
+session format and the C API change freely between 0.x releases (see
+`CHANGELOG.md`). The version lives in `CROPMARK_VERSION` (`cli/cropmark.h`).
 
 Status legend: **[done]** implemented and tested, **[first pass]** works but
 is deliberately minimal, **[planned]** not started.
@@ -301,13 +305,21 @@ a message.
 
 ## 8. Frontends
 
-**One command.** Both frontends are linked into one program, `cropmark`.
-`cli/main.c` picks one from the arguments: any option other than the
-window's own (`--quality`, `--no-session`) means the command line, so every
-command that worked with the old `pmark` CLI behaves the same. Otherwise
-the window opens: on the picker with no argument or a folder, on the editor
-with a photo or session. `make headless` builds the same program without
-the window (`-DCM_NO_GUI`) for machines without SDL2.
+**One command.** Both frontends are linked into one program, `cropmark`
+(installed with a `pmark` alias). `cli/main.c` picks one from the
+arguments: a bare `cropmark` opens the picker, `cropmark PHOTO` the editor.
+Any option other than the window's own (`--pictures`, `--quality`,
+`--no-session`) selects the command line. `make headless` builds the same
+program without the window (`-DCM_NO_GUI`) for machines without SDL2.
+
+**Desktop launcher** (`data/`). `make install` fills in
+`cropmark.desktop.in` with absolute paths to the installed program and
+SVG icon (so it works when `~/.local/bin` is not on the session's `PATH`)
+and installs it as a freedesktop.org menu entry; `make desktop-shortcut`
+copies it to the desktop, executable and marked trusted for GNOME. It runs
+`cropmark --pictures %f`: with no file, the picker starts in
+`XDG_PICTURES_DIR` (from `user-dirs.dirs`), else `~/Pictures`, else `~`;
+with a file ("Open With" in a file manager), the editor opens on it.
 
 **Command line (`cli/batch.c`)** **[done]**. Arguments are a small left-to-right program:
 setting flags (`--color`, `--width`, `--size`, `--outline`,
@@ -374,7 +386,7 @@ it is roadmap item 1 rather than part of this change.
 
 | Target | What it covers |
 |---|---|
-| `make test` | 142 unit checks (`tests/test_core.c`); command-line end-to-end, including overwrite rules, stale sessions, cleanup of temporary files and the choice between window and command line (`tests/cli_smoke.sh`); golden images (`tests/golden.sh`); headless editor and picker selftests (`tests/gui_selftest.sh`) |
+| `make test` | 142 unit checks (`tests/test_core.c`); command-line end-to-end, including overwrite rules, stale sessions, cleanup of temporary files and the choice between window and command line (`tests/cli_smoke.sh`); golden images (`tests/golden.sh`); headless editor and picker selftests, including `--pictures` (`tests/gui_selftest.sh`); install and uninstall into a scratch folder (`tests/install_check.sh`) |
 | `make test-headless` | the tests that need no SDL2, against `build/cropmark-headless` |
 | `make asan` | `make test` under AddressSanitizer (with leak detection) and UBSan |
 | `make fuzz-smoke` | mutation fuzzing of all parsers under ASan and UBSan |
@@ -403,7 +415,7 @@ docs/                this document
 `make` builds `build/libpmark.a` and `build/cropmark` (needs SDL2 via
 `pkg-config`); `make install` copies it to `$(PREFIX)/bin`, `~/.local/bin`
 by default. `make headless` builds `build/cropmark-headless` without SDL2.
-The core keeps its `pm_` prefix and the `.pmark` session format.
+`make install` also adds the `pmark` alias, the menu entry and the icon.
 
 ## 11. Known limitations
 

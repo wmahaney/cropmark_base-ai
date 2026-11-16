@@ -1,14 +1,21 @@
 # cropmark
 
-cropmark marks up photos, crops, and adds text. It is a small C11 program
-(formerly `pmark`) with one command, `cropmark`, that works two ways:
+cropmark (`pmark` for short) crops photos, draws on them, and adds text.
+It is a small C11 program, and one command does everything:
 
-- **In a window.** Run `cropmark` on its own to browse the pictures in the
-  current folder and pick one, or `cropmark photo.jpg` to open the editor on
-  that photo straight away.
-- **From the command line**, for scripted and batch edits:
-  `cropmark photo.jpg --crop ... -o out.jpg` applies the edits without
-  opening a window.
+- **`cropmark`** opens a picture picker; choose a photo to edit it.
+- **`cropmark photo.jpg`** opens the editor on that photo.
+- **`cropmark photo.jpg --crop ... -o out.jpg`** applies edits from the
+  command line, without a window.
+
+It can also be started from your desktop or applications menu, which opens
+the picker in your Pictures folder.
+
+> **Version 0.3.0. No backward compatibility before 1.0.** Any 0.x release
+> may change the command-line options, the `.pmark` session format and the
+> C API, with no migration path: a session saved by one version may not
+> open in the next. Keep the exported PNG and JPEG files as your durable
+> output. See [CHANGELOG.md](CHANGELOG.md).
 
 ![Example output: a cropped photo with a highlighter stroke, a circled sun, an arrow and outlined text](docs/images/example.png)
 
@@ -46,13 +53,21 @@ You need a C11 compiler, `make` and SDL2 (for the window).
 | macOS (Homebrew) | `xcode-select --install && brew install sdl2 pkg-config` |
 
 ```sh
-make            # builds build/cropmark
-make install    # copies it to ~/.local/bin (or: sudo make install PREFIX=/usr/local)
+make                    # builds build/cropmark
+make install            # installs it for you, under ~/.local
+make desktop-shortcut   # optional: a cropmark icon on your desktop
 ```
 
-After `make install`, `cropmark` runs from any folder, provided
-`~/.local/bin` is on your `PATH` (it is by default on most Linux desktops;
-`make install` tells you if it isn't). `make uninstall` removes it.
+`make install` puts `cropmark` and its `pmark` alias in `~/.local/bin`, and
+adds cropmark to your applications menu with an icon. It is also offered
+under "Open With" for PNG and JPEG files in your file manager. For all users,
+use `sudo make install PREFIX=/usr/local`. `make uninstall` removes
+everything, including the desktop shortcut.
+
+If `~/.local/bin` is not on your `PATH`, `make install` says so. The menu
+entry and desktop shortcut work regardless. On GNOME, desktop icons need
+the Desktop Icons extension, which Ubuntu includes. If the icon shows as
+untrusted, right-click it and choose "Allow Launching".
 
 The image codecs and font rasteriser (stb) are vendored in `third_party/`,
 so nothing else needs installing. On a machine without SDL2, `make headless`
@@ -60,7 +75,11 @@ builds `build/cropmark-headless`, which has the command-line mode only.
 
 ## Quick start
 
-Go to a folder of photos and run `cropmark`:
+**From the desktop:** click the cropmark icon (or find cropmark in your
+applications menu). The picker opens on your Pictures folder; double-click
+a photo to edit it.
+
+**From a terminal:** go to a folder of photos and run `cropmark`:
 
 ```sh
 cd ~/Pictures
@@ -91,15 +110,27 @@ cropmark photo.jpg \
 
 ## How cropmark decides what to do
 
+The basics:
+
 | Command | What happens |
 |---|---|
 | `cropmark` | picture picker in the current folder |
-| `cropmark FOLDER` | picture picker in `FOLDER` |
-| `cropmark PHOTO [OUTPUT]` | editor window on `PHOTO` (a `.jpg`/`.png`, or a `.pmark` session) |
-| `cropmark PHOTO EDITS... -o OUTPUT` | command-line mode: apply the edits, no window |
+| `cropmark PHOTO` | editor on `PHOTO` (a `.jpg`/`.png`, or a `.pmark` session) |
 
-Any option other than the window's own (`--quality N`, `--no-session`)
-selects command-line mode. `cropmark --help` prints the full reference.
+Options for the window:
+
+| Command or option | What it does |
+|---|---|
+| `cropmark FOLDER` | start the picker in `FOLDER` |
+| `--pictures` | start the picker in your Pictures folder (what the desktop launcher uses) |
+| `cropmark PHOTO OUTPUT` | save to `OUTPUT` instead of `PHOTO-marked.png` |
+| `--quality N` | JPEG quality of `OUTPUT` |
+| `--no-session` | don't write `OUTPUT.pmark` next to `OUTPUT` |
+| `--version` | print the version |
+
+Any other option, such as `--crop` or `-o`, switches to command-line mode
+(below). `cropmark --help` prints the full reference, and `pmark` works
+anywhere `cropmark` does.
 
 ## Command-line reference
 
@@ -168,7 +199,7 @@ cropmark photo.jpg --crop 0,0,1200,800 -o cropped.jpg
 ## The picture picker
 
 ```sh
-cropmark [FOLDER]
+cropmark [FOLDER | --pictures]
 ```
 
 ![The picture picker: a grid of thumbnails with two folders and six pictures, the first picture selected](docs/images/picker.png)
@@ -318,7 +349,8 @@ export PMARK_FONT=/path/to/MyFont.ttf
 
 ```sh
 make test           # unit tests, command-line end-to-end tests, golden images,
-                    # and scripted editor and picker sessions (no display needed)
+                    # scripted editor and picker sessions (no display needed),
+                    # and an install/uninstall check into a scratch folder
 make asan           # all of the above under AddressSanitizer + UBSan
 make test-headless  # the tests that need no SDL2, against cropmark-headless
 make fuzz-smoke     # mutation-fuzz the image, EXIF, ICC and session parsers
@@ -332,6 +364,7 @@ committing. With clang, `make fuzz-libfuzzer` runs coverage-guided fuzzing.
 
 ```
 include/pmark.h     public API of the editing core
+data/               desktop entry template and icon
 src/                the core: images, drawing, text, documents, sessions, files
 cli/main.c          cropmark's entry point: picks the window or command-line mode
 cli/batch.c         command-line mode
@@ -343,9 +376,10 @@ docs/               ARCHITECTURE.md and README images
 ```
 
 The core is a library (`build/libpmark.a`) with no dependency on SDL, so
-another front end can be built on it. The core keeps its original `pm_`
-prefix, and session files keep the `.pmark` extension and the `PMARK_FONT`
-variable, so existing sessions and settings keep working. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+another front end can be built on it. `pmark` is the project's short name:
+it names the core (`libpmark`, `pmark.h`, the `pm_` prefix), session files
+(`.pmark`), the `PMARK_FONT` variable and the `pmark` command alias.
+`data/` holds the desktop entry template and the icon. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 covers the design: data model, rendering, the session format, input limits,
 the persistence rules and the roadmap.
 
@@ -355,7 +389,8 @@ the persistence rules and the roadmap.
 - The editor's Save As takes a typed name, not a file dialog, and keeps the
   output format.
 - The picker uses POSIX folder listing, so the window builds on Linux and
-  macOS; Windows is not supported yet.
+  macOS; Windows is not supported yet. The desktop launcher is for Linux
+  desktops (freedesktop.org menus).
 - Very large images must fit in one GPU texture to be shown in the editor
   (commonly 8192 or 16384 pixels per side). The command line has no such
   limit.
