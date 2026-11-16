@@ -1,6 +1,6 @@
-# pmark architecture
+# cropmark architecture
 
-pmark opens a photo (JPEG or PNG), lets you crop it, draw on it with markers
+cropmark (formerly pmark) opens a photo (JPEG or PNG), lets you crop it, draw on it with markers
 and shapes, and place text on it, then writes the result as PNG or JPEG. An
 edit can also be saved as a session and reopened later. It is written in C11.
 
@@ -30,8 +30,10 @@ ligatures, emoji).
 ## 2. Layering
 
 ```
-  cli/main.c  (pmark)          gui/main.c  (pmark-gui, SDL2)
-  argv -> ops -> save          toolbar, input, view, previews
+                    cli/main.c  (cropmark: chooses a frontend)
+                   /                          \
+  cli/batch.c  (command line)       gui/gui.c + gui/picker.c  (SDL2)
+  argv -> ops -> save               picker, toolbar, input, view, previews
           \                        /
            v                      v
       include/pmark.h   -- the only header frontends include
@@ -159,7 +161,7 @@ images.
 
 ## 5. Untrusted input
 
-Every byte that enters pmark from a file is treated as hostile.
+Every byte that enters cropmark from a file is treated as hostile.
 
 | Limit | Value | Where it is enforced |
 |---|---|---|
@@ -173,7 +175,7 @@ Every byte that enters pmark from a file is treated as hostile.
 
 The pixel limit is checked with `stbi_info` on the header, so a 40000x40000
 "image" a few hundred bytes long is rejected without allocating anything.
-When stb itself refuses an oversized header, pmark reads the PNG IHDR or JPEG
+When stb itself refuses an oversized header, cropmark reads the PNG IHDR or JPEG
 SOF dimensions to report `PM_ERR_TOO_BIG` rather than a generic format error.
 
 **Fuzzing.** `tests/fuzz.c` is a libFuzzer target covering every parser that
@@ -273,7 +275,7 @@ Why a line format rather than JSON: it needs no parser dependency, it diffs
 well, and a hand-written strict parser for it is small enough to fuzz
 thoroughly. The version number in line 1 leaves room to move.
 
-The GUI writes `OUTPUT.pmark` next to every saved image (unless
+The editor writes `OUTPUT.pmark` next to every saved image (unless
 `--no-session`), and can open a `.pmark` directly. It does not write a
 session when the output replaced its own base photo, since that session
 would describe edits on top of an image that no longer exists.
@@ -299,17 +301,45 @@ a message.
 
 ## 8. Frontends
 
-**CLI (`pmark`)** **[done]**. Arguments are a small left-to-right program:
+**One command.** Both frontends are linked into one program, `cropmark`.
+`cli/main.c` picks one from the arguments: any option other than the
+window's own (`--quality`, `--no-session`) means the command line, so every
+command that worked with the old `pmark` CLI behaves the same. Otherwise
+the window opens: on the picker with no argument or a folder, on the editor
+with a photo or session. `make headless` builds the same program without
+the window (`-DCM_NO_GUI`) for machines without SDL2.
+
+**Command line (`cli/batch.c`)** **[done]**. Arguments are a small left-to-right program:
 setting flags (`--color`, `--width`, `--size`, `--outline`,
 `--outline-color`, `--font`) change the current state; edit flags (`--crop`,
 `--stroke`, `--arrow`, `--rect`, `--ellipse`, `--text`) push ops. INPUT may
 be a photo or a `.pmark` session. Output flags are covered in section 6.
 
-**GUI (`pmark-gui`)** **[first pass]**. SDL2, one window.
+**Window (`gui/`)** **[first pass]**. SDL2, one window shared by the picker
+and the editor.
 
-- *Toolbar*: tools, eight colour swatches, size −/+, outline toggle, undo,
-  redo, save and save as, all drawn with pmark's own text renderer into a
-  texture. Every button has a keyboard shortcut.
+- *Picker* (`gui/picker.c`): lists a folder's subfolders and `.jpg`,
+  `.jpeg`, `.png` and `.pmark` files (hidden files skipped, folders first,
+  case-insensitive order) as a grid of tiles. It owns no window: the app
+  feeds it events and asks it to draw, and it reports `PICK_OPEN` or
+  `PICK_CANCEL`. Typing filters by name; a typed path opens on Enter.
+- *Thumbnails*: one worker thread decodes and area-averages them, newest
+  folder only (a generation counter discards results from a folder left
+  behind). The main thread marks the tiles on screen, plus one row each
+  way, as wanted each frame, so the worker never decodes pictures nobody is
+  looking at; it uploads finished thumbnails as textures and drops
+  off-screen ones beyond 240. A session's thumbnail is its rendered canvas.
+  All shared state is behind one mutex; drawing reads only main-thread
+  fields (checked with ThreadSanitizer).
+- *Switching*: Ctrl+O or the Open button shows the picker in the photo's
+  folder. With unsaved edits the first request only warns, and the old
+  document is kept until a new one opens successfully, so Esc from the
+  picker returns to the edit intact and an unreadable file changes nothing.
+  The UI font belongs to the app, not the document, since documents come
+  and go.
+- *Toolbar*: Open, tools, eight colour swatches, size −/+, outline toggle,
+  undo, redo, save and save as, all drawn with the core's own text renderer
+  into a texture. Every button has a keyboard shortcut.
 - *Status bar*: file, size, zoom, output path, transient messages, and the
   Save As and confirmation prompts.
 - *View*: `screen = image * zoom + pan`, in renderer pixels. The window is
@@ -326,8 +356,13 @@ be a photo or a `.pmark` session. Output flags are covered in section 6.
   scripted session (toolbar clicks, every tool, undo and redo of a crop, text
   move, save with confirmation, session round trip, Save As (empty name
   refused, typed extension replaced), refusal to replace the original) and checks the end state.
-  `make test-gui` runs it headless with `SDL_VIDEODRIVER=dummy`.
-  `PMARK_SELFTEST_SHOT=file.png` also captures the final frame.
+  `--selftest-picker`, run as a naked call in a prepared folder, checks the
+  listing, thumbnails, filtering, folder navigation, opening, the unsaved
+  edits guard, an unreadable file and a typed path. `tests/gui_selftest.sh`
+  runs both headless with `SDL_VIDEODRIVER=dummy`, as part of `make test`.
+  `CROPMARK_SELFTEST_SHOT=file.png` captures the final frame;
+  `CROPMARK_PICKER_SHOT=file.png` with `--selftest-picker` only screenshots
+  the picker of the current folder (used for `docs/images/picker.png`).
 
 **Why still SDL2.** SDL3 (stable since 2025) offers native file dialogs
 (`SDL_ShowSaveFileDialog`), which would replace the typed Save As prompt.
@@ -339,9 +374,9 @@ it is roadmap item 1 rather than part of this change.
 
 | Target | What it covers |
 |---|---|
-| `make test` | 142 unit checks (`tests/test_core.c`); CLI end-to-end, including overwrite rules, stale sessions and cleanup of temporary files (`tests/cli_smoke.sh`); golden images (`tests/golden.sh`) |
-| `make test-gui` | headless GUI selftest |
-| `make asan` | all of the above under AddressSanitizer and UBSan |
+| `make test` | 142 unit checks (`tests/test_core.c`); command-line end-to-end, including overwrite rules, stale sessions, cleanup of temporary files and the choice between window and command line (`tests/cli_smoke.sh`); golden images (`tests/golden.sh`); headless editor and picker selftests (`tests/gui_selftest.sh`) |
+| `make test-headless` | the tests that need no SDL2, against `build/cropmark-headless` |
+| `make asan` | `make test` under AddressSanitizer (with leak detection) and UBSan |
 | `make fuzz-smoke` | mutation fuzzing of all parsers under ASan and UBSan |
 | `make golden-update` | regenerate references after an intended rendering change (review the diff) |
 
@@ -355,22 +390,28 @@ absent, because font versions change glyph shapes.
 ```
 include/pmark.h      public API
 src/                 core
-cli/main.c           pmark
-gui/main.c           pmark-gui
-tests/               test_core.c, cli_smoke.sh, golden.sh, imgdiff.c, fuzz.c,
+cli/main.c           cropmark: chooses the window or the command line
+cli/batch.c          the command line
+gui/gui.c            the window and the editor
+gui/picker.c         the picture picker
+tests/               test_core.c, cli_smoke.sh, golden.sh, gui_selftest.sh, imgdiff.c, fuzz.c,
                      data/ (fixtures), golden/ (references), fuzz_seeds/
 third_party/         vendored stb headers (public domain / MIT)
 docs/                this document
 ```
 
-`make` builds `build/libpmark.a` and `build/pmark`. `make gui` adds
-`build/pmark-gui` (needs SDL2 via `pkg-config`).
+`make` builds `build/libpmark.a` and `build/cropmark` (needs SDL2 via
+`pkg-config`); `make install` copies it to `$(PREFIX)/bin`, `~/.local/bin`
+by default. `make headless` builds `build/cropmark-headless` without SDL2.
+The core keeps its `pm_` prefix and the `.pmark` session format.
 
 ## 11. Known limitations
 
 - Memory is about three copies of the image (base, canvas, texture) plus
   checkpoints up to the 256 MB budget: under 500 MB for a 12 MP photo.
-- The GUI needs the image to fit in one GPU texture (commonly 8192 or 16384
+- The picker lists folders with POSIX `opendir`/`realpath`, so the window
+  builds on Linux and macOS only; the command line has no such limit.
+- The editor needs the image to fit in one GPU texture (commonly 8192 or 16384
   pixels per side) and holds a canvas-sized 8-bit mask while a stroke is
   being drawn.
 - Blending is done on stored values without linearising, which slightly
