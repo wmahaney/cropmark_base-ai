@@ -1,13 +1,16 @@
-# pmark build. Targets:
-#   make          core library + CLI           (no dependencies beyond libc/libm)
-#   make gui      SDL2 frontend                (needs sdl2 via pkg-config)
-#   make test     unit tests, CLI smoke test, golden images
-#   make test-gui headless GUI selftest (needs SDL2; uses SDL's dummy driver)
-#   make asan     rebuild everything under ASan/UBSan and run the tests
+# cropmark build. Targets:
+#   make            build/cropmark: picture picker, editor window and batch
+#                   mode in one program (needs SDL2, found with pkg-config)
+#   make install    copy cropmark to $(PREFIX)/bin   (PREFIX=~/.local by default)
+#   make uninstall  remove it again
+#   make test       unit tests, batch smoke test, golden images, window selftests
+#   make headless   build/cropmark-headless: batch mode only, no SDL2 needed
+#   make test-headless   the tests that need no SDL2, against cropmark-headless
+#   make asan       rebuild everything under ASan/UBSan and run the tests
 #   make fuzz-smoke      mutation-fuzz the parsers (gcc + ASan, FUZZ_ITERS=N)
 #   make fuzz-libfuzzer  coverage-guided fuzzing (needs clang)
 #   make golden-update   regenerate tests/golden/*.png (review the diff!)
-#   make vendor   re-download the stb headers into third_party/
+#   make vendor     re-download the stb headers into third_party/
 
 CC      ?= cc
 OPT     ?= -O2 -g
@@ -23,8 +26,14 @@ HDRS     := include/pmark.h src/pm_internal.h
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
 SDL_LIBS   := $(shell pkg-config --libs sdl2 2>/dev/null)
 
-.PHONY: all gui test test-gui asan vendor clean golden-update fuzz-smoke fuzz-libfuzzer
-all: $(B)/pmark
+.PHONY: all install uninstall headless test test-headless asan vendor clean golden-update \
+        fuzz-smoke fuzz-libfuzzer
+all: $(B)/cropmark
+
+PREFIX ?= $(HOME)/.local
+APP_SRC  := cli/main.c cli/batch.c
+GUI_SRC  := gui/gui.c gui/picker.c
+APP_HDRS := $(HDRS) cli/cropmark.h gui/picker.h
 
 $(B):
 	mkdir -p $(B)
@@ -38,13 +47,24 @@ $(B)/%.o: src/%.c $(HDRS) | $(B)
 $(B)/libpmark.a: $(CORE_OBJ)
 	$(AR) rcs $@ $^
 
-$(B)/pmark: cli/main.c $(B)/libpmark.a $(HDRS)
-	$(CC) $(CFLAGS) $(WARN) $< $(B)/libpmark.a $(LDLIBS) -o $@
+$(B)/cropmark: $(APP_SRC) $(GUI_SRC) $(B)/libpmark.a $(APP_HDRS)
+	@test -n "$(SDL_LIBS)" || { echo "SDL2 not found: install it (apt install libsdl2-dev," \
+	  "dnf install SDL2-devel, brew install sdl2), or run 'make headless' for batch mode only"; exit 1; }
+	$(CC) $(CFLAGS) $(WARN) -Icli -Igui $(SDL_CFLAGS) $(APP_SRC) $(GUI_SRC) $(B)/libpmark.a \
+	  $(SDL_LIBS) $(LDLIBS) -o $@
 
-gui: $(B)/pmark-gui
-$(B)/pmark-gui: gui/main.c $(B)/libpmark.a $(HDRS)
-	@test -n "$(SDL_LIBS)" || { echo "SDL2 not found (install libsdl2-dev / sdl2)"; exit 1; }
-	$(CC) $(CFLAGS) $(WARN) $(SDL_CFLAGS) $< $(B)/libpmark.a $(SDL_LIBS) $(LDLIBS) -o $@
+headless: $(B)/cropmark-headless
+$(B)/cropmark-headless: $(APP_SRC) $(B)/libpmark.a $(HDRS) cli/cropmark.h
+	$(CC) $(CFLAGS) $(WARN) -DCM_NO_GUI -Icli $(APP_SRC) $(B)/libpmark.a $(LDLIBS) -o $@
+
+install: $(B)/cropmark
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp $(B)/cropmark $(DESTDIR)$(PREFIX)/bin/cropmark
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; \
+	  *) echo "note: $(PREFIX)/bin is not on your PATH";; esac
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/cropmark
 
 $(B)/test_core: tests/test_core.c $(B)/libpmark.a $(HDRS)
 	$(CC) $(CFLAGS) $(WARN) -Isrc $< $(B)/libpmark.a $(LDLIBS) -o $@
@@ -52,17 +72,19 @@ $(B)/test_core: tests/test_core.c $(B)/libpmark.a $(HDRS)
 $(B)/imgdiff: tests/imgdiff.c $(B)/libpmark.a $(HDRS)
 	$(CC) $(CFLAGS) $(WARN) $< $(B)/libpmark.a $(LDLIBS) -o $@
 
-test: $(B)/test_core $(B)/pmark $(B)/imgdiff
+test: $(B)/test_core $(B)/cropmark $(B)/imgdiff
 	$(B)/test_core
-	sh tests/cli_smoke.sh $(B)/pmark
-	sh tests/golden.sh $(B)
+	sh tests/cli_smoke.sh $(B)/cropmark
+	sh tests/golden.sh $(B)/cropmark $(B)/imgdiff
+	sh tests/gui_selftest.sh $(B)/cropmark
 
-test-gui: $(B)/pmark-gui
-	@T=$$(mktemp -d) && cp tests/data/sample.png $$T/photo.png && cp tests/data/sample.png $$T/photo-marked.png && \
-	SDL_VIDEODRIVER=dummy $(B)/pmark-gui $$T/photo.png --selftest $$T/renamed; rc=$$?; rm -rf $$T; exit $$rc
+test-headless: $(B)/test_core $(B)/cropmark-headless $(B)/imgdiff
+	$(B)/test_core
+	sh tests/cli_smoke.sh $(B)/cropmark-headless
+	sh tests/golden.sh $(B)/cropmark-headless $(B)/imgdiff
 
-golden-update: $(B)/pmark $(B)/imgdiff
-	sh tests/golden.sh $(B) update
+golden-update: $(B)/cropmark $(B)/imgdiff
+	sh tests/golden.sh $(B)/cropmark $(B)/imgdiff update
 
 FUZZ_ITERS ?= 20000
 FUZZ_SEEDS := tests/data/sample.png tests/data/sample_exif6.jpg $(wildcard tests/fuzz_seeds/*)
@@ -82,8 +104,6 @@ fuzz-libfuzzer:
 asan:
 	$(MAKE) clean
 	$(MAKE) test OPT="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
-	@if [ -n "$(SDL_LIBS)" ]; then ASAN_OPTIONS=detect_leaks=0 $(MAKE) test-gui \
-	  OPT="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"; fi
 
 STB := https://raw.githubusercontent.com/nothings/stb/master
 vendor:
