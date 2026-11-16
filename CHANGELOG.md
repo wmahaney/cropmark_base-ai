@@ -5,6 +5,15 @@ options, the `.pmark` session format and the C API without a migration
 path, so a session saved by one 0.x version may not open in the next. The
 images cropmark exports (PNG and JPEG) are the durable output.
 
+## Repository renamed (2026-11-16)
+
+- The repository `drawing_tool-claude` is now `cropmark_base-ai`: the desktop
+  tool and the core library. The `-ai` suffix marks that the tool was built
+  with Claude. Nothing in the program changed: the `cropmark` and `pmark`
+  commands, `libpmark`, `pmark.h`, the `pm_` prefix, the `.pmark` session
+  format and `PMARK_FONT` keep their names. Update a clone with
+  `git remote set-url origin https://github.com/wmahaney/cropmark_base-ai.git`.
+
 ## 0.3.0 (2026-11-16)
 
 - One command, `cropmark` (`pmark` for short), replaces the separate `pmark`

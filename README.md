@@ -11,6 +11,11 @@ It is a small C11 program, and one command does everything:
 It can also be started from your desktop or applications menu, which opens
 the picker in your Pictures folder.
 
+cropmark was built with Claude, and the `-ai` suffix in this repository's
+name (`cropmark_base-ai`) marks that. This repository holds the desktop tool
+and the core library; the web version is at
+[wmahaney/cropmark-ai](https://github.com/wmahaney/cropmark-ai).
+
 > **Version 0.3.0. No backward compatibility before 1.0.** Any 0.x release
 > may change the command-line options, the `.pmark` session format and the
 > C API, with no migration path: a session saved by one version may not
