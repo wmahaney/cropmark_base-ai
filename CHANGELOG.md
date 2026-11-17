@@ -5,6 +5,14 @@ options, the `.pmark` session format and the C API without a migration
 path, so a session saved by one 0.x version may not open in the next. The
 images cropmark exports (PNG and JPEG) are the durable output.
 
+## Unreleased
+
+No change to the desktop program or its output.
+
+- Web version: `cm_web_copy(path)` writes the picture as a PNG for the page to put on
+  the clipboard, without counting as a save; `cm_web_status(msg)` shows a message from
+  the page in the status bar. Both are inside `#ifdef __EMSCRIPTEN__`.
+
 ## Support for the web version (2026-11-16)
 
 No change to the desktop program or its output.
