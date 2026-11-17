@@ -317,8 +317,10 @@ static void test_atomic(void)
     CHECK(pm_image_save(&a, tmp("no/such/dir.png"), 0) == PM_ERR_IO);
     CHECK(!dir_has_temp()); /* failed or not, nothing is left behind */
 
+#ifndef __EMSCRIPTEN__ /* Emscripten's file systems have no hard links */
     CHECK(link(p, tmp("hardlink.png")) == 0);
     CHECK(pm_path_same_file(p, tmp("hardlink.png")));
+#endif
     CHECK(!pm_path_same_file(p, tmp("t.png")) && !pm_path_same_file(p, tmp("missing")));
     pm_image_free(&a);
     pm_image_free(&b);
