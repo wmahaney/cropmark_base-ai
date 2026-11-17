@@ -1526,6 +1526,8 @@ done:
  *     the page hands it over through cm_web_open.
  *   - Save writes the file as usual, then tells the page (Module.cmSaved), which turns
  *     it into a download. Sessions are off.
+ *   - Copy (cm_web_copy) writes the picture as a PNG for the page, which puts it on the
+ *     clipboard. It is not a save: the edits stay unsaved.
  *   - The loop is driven by the browser and pauses itself whenever a frame had nothing
  *     to do. The page calls cm_web_wake on input, so an idle editor does no work.
  */
@@ -1630,6 +1632,27 @@ EMSCRIPTEN_KEEPALIVE void cm_web_set_format(int jpeg)
         a->out_confirmed = false;
     }
     a->ui_dirty = true;
+    web_redraw = true;
+    cm_web_wake();
+}
+
+/* Copy: writes the picture as it is now (every committed edit, nothing in progress) to
+ * path as a PNG, for the page to put on the clipboard. Unlike a save it does not count
+ * as saving: the edits stay unsaved, and Save still asks where it would have asked.
+ * Returns 0 or a pm_status; PM_ERR_ARG if no picture is open. */
+EMSCRIPTEN_KEEPALIVE int cm_web_copy(const char *path)
+{
+    app_t *a = &g_app;
+    if (!a->have_doc) return (int)PM_ERR_ARG;
+    return (int)pm_doc_export(&a->doc, path, a->quality, true);
+}
+
+/* A short message in the editor's status bar, for the page (the result of a copy). */
+EMSCRIPTEN_KEEPALIVE void cm_web_status(const char *msg)
+{
+    app_t *a = &g_app;
+    if (!a->have_doc) return;
+    set_status(a, 3000, "%s", msg);
     web_redraw = true;
     cm_web_wake();
 }

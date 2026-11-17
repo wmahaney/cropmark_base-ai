@@ -464,6 +464,9 @@ inside `#ifdef __EMSCRIPTEN__`:
 - The loop: `web_frame` drains SDL's events, draws if there were any (or a timed status
   message just ran out), and otherwise pauses itself with
   `emscripten_pause_main_loop`. The page calls `cm_web_wake` on input.
+- `cm_web_copy(path)` writes the picture as it is (committed edits only) to `path` as a
+  PNG, for the page to put on the clipboard. It is not a save: `modified` is unchanged.
+  `cm_web_status(msg)` shows the page's message about it in the status bar.
 - `cm_web_set_palette` replaces the toolbar's colours, which are one table (`ui`) with
   the desktop colours as its initial value.
 
