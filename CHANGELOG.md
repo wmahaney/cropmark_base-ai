@@ -7,8 +7,13 @@ images cropmark exports (PNG and JPEG) are the durable output.
 
 ## Unreleased
 
-No change to the desktop program or its output.
-
+- **Undo and redo while typing text.** `Ctrl+Z`, `Ctrl+Y` and the toolbar's Undo and
+  Redo now finish the text being typed first, so undo takes the text away and redo
+  brings it back. Before, the keys did nothing while typing, and the Undo button threw
+  the typed text away and also undid the edit before it. The GUI self-test covers both.
+- Web version: `cm_web_history(redo)` undoes or redoes for the page, which passes on
+  `Ctrl+Z` and `Ctrl+Y` pressed while the canvas does not have the keyboard. Inside
+  `#ifdef __EMSCRIPTEN__`.
 - Web version: `cm_web_copy(path)` writes the picture as a PNG for the page to put on
   the clipboard, without counting as a save; `cm_web_status(msg)` shows a message from
   the page in the status bar. Both are inside `#ifdef __EMSCRIPTEN__`.

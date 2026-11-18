@@ -254,7 +254,7 @@ has a keyboard shortcut:
 | mouse wheel | zoom around the cursor |
 | middle-drag, or `Space` + drag | pan |
 | `0` | fit the photo to the window |
-| `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) | undo / redo |
+| `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) | undo / redo; text still being typed is finished first, so undo takes it away and redo brings it back |
 | `Ctrl+S` | save |
 | `Ctrl+Shift+S` | save as |
 | `Ctrl+O` | back to the picture picker, in the photo's folder |
