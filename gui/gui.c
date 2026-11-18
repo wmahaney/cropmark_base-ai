@@ -486,6 +486,15 @@ static void history(app_t *a, bool redo)
     a->ui_dirty = true;
 }
 
+/* Undo or redo from the keys or the toolbar. Text still being typed is finished first,
+ * as switching tools does, so it is an edit like any other: undo takes it away and
+ * redo brings it back. (history() alone would throw the text away.) */
+static void undo_redo(app_t *a, bool redo)
+{
+    text_end(a, true);
+    history(a, redo);
+}
+
 static void resize(app_t *a, bool bigger)
 {
     float f = bigger ? 1.25f : 0.8f;
@@ -851,8 +860,8 @@ static void toolbar_click(app_t *a, float x, float y)
             a->ts.outline_px = a->ts.outline_px > 0 ? 0 : fmaxf(2.0f, roundf(a->ts.size_px / 16.0f));
             if (a->typing) text_preview(a);
             break;
-        case A_UNDO:    history(a, false); break;
-        case A_REDO:    history(a, true); break;
+        case A_UNDO:    undo_redo(a, false); break;
+        case A_REDO:    undo_redo(a, true); break;
         case A_SAVE:    save(a, false); break;
         case A_SAVE_AS: save_as_open(a); break;
         }
@@ -883,11 +892,13 @@ static void on_key(app_t *a, const SDL_KeyboardEvent *k)
         else if (sym == SDLK_BACKSPACE) { utf8_pop(a->text, &a->text_len); text_preview(a); }
         else if (ctrl && sym == SDLK_s) { text_end(a, true); save(a, false); }
         else if (ctrl && sym == SDLK_o) { text_end(a, true); request_open(a); }
+        else if (ctrl && sym == SDLK_z) undo_redo(a, shift);
+        else if (ctrl && sym == SDLK_y) undo_redo(a, true);
         return;
     }
     if (ctrl) {
-        if (sym == SDLK_z) history(a, shift);
-        else if (sym == SDLK_y) history(a, true);
+        if (sym == SDLK_z) undo_redo(a, shift);
+        else if (sym == SDLK_y) undo_redo(a, true);
         else if (sym == SDLK_s && shift) save_as_open(a);
         else if (sym == SDLK_s) save(a, false);
         else if (sym == SDLK_o) request_open(a);
@@ -1240,6 +1251,23 @@ static int selftest(app_t *a, const char *save_as)
     ST_CHECK(a->typing && a->text_at.x > before.x + 10 && a->text_at.y < before.y - 5);
     st_key(a, SDLK_RETURN, 0);
     ST_CHECK(a->doc.n_applied == 5);
+    /* undo while typing finishes the text and takes it away; the edit before it stays,
+     * and redo brings the text back. The same from the toolbar's Undo. */
+    st_mouse(a, SDL_MOUSEBUTTONDOWN, 0.50f, 0.40f);
+    st_mouse(a, SDL_MOUSEBUTTONUP, 0.50f, 0.40f);
+    st_type(a, "undone");
+    ST_CHECK(a->typing);
+    st_key(a, SDLK_z, KMOD_CTRL);
+    ST_CHECK(!a->typing && a->doc.n_applied == 5);
+    st_key(a, SDLK_y, KMOD_CTRL);
+    ST_CHECK(a->doc.n_applied == 6);
+    st_key(a, SDLK_z, KMOD_CTRL);
+    ST_CHECK(a->doc.n_applied == 5);
+    st_mouse(a, SDL_MOUSEBUTTONDOWN, 0.50f, 0.40f);
+    st_mouse(a, SDL_MOUSEBUTTONUP, 0.50f, 0.40f);
+    st_type(a, "undone");
+    ST_CHECK(a->typing && st_click_button(a, A_UNDO, 0));
+    ST_CHECK(!a->typing && a->doc.n_applied == 5);
     st_key(a, SDLK_c, 0);
     st_drag(a, 0.04f, 0.04f, 0.96f, 0.96f);
     st_key(a, SDLK_RETURN, 0);                                 /* apply crop           */
@@ -1528,6 +1556,8 @@ done:
  *     it into a download. Sessions are off.
  *   - Copy (cm_web_copy) writes the picture as a PNG for the page, which puts it on the
  *     clipboard. It is not a save: the edits stay unsaved.
+ *   - Keys reach the editor only while its canvas has the focus, so the page passes on
+ *     Ctrl+Z and Ctrl+Y pressed elsewhere on it (cm_web_history).
  *   - The loop is driven by the browser and pauses itself whenever a frame had nothing
  *     to do. The page calls cm_web_wake on input, so an idle editor does no work.
  */
@@ -1653,6 +1683,18 @@ EMSCRIPTEN_KEEPALIVE void cm_web_status(const char *msg)
     app_t *a = &g_app;
     if (!a->have_doc) return;
     set_status(a, 3000, "%s", msg);
+    web_redraw = true;
+    cm_web_wake();
+}
+
+/* Undo (redo = 0) or redo (redo = 1), for Ctrl+Z and Ctrl+Y pressed while the page,
+ * not the canvas, has the keyboard (SDL hears keys on the canvas only). Does what the
+ * keys do in the editor; nothing while a prompt is open, as there. */
+EMSCRIPTEN_KEEPALIVE void cm_web_history(int redo)
+{
+    app_t *a = &g_app;
+    if (!a->have_doc || a->prompt != P_NONE) return;
+    undo_redo(a, redo != 0);
     web_redraw = true;
     cm_web_wake();
 }

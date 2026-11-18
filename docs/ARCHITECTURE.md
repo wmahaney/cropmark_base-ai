@@ -363,10 +363,11 @@ and the editor.
   affected region. The crop rectangle and text-box outline are drawn by SDL
   and never reach the canvas.
 - *Text*: click to place, type, then drag the box to move it before
-  committing with Enter.
+  committing with Enter. Undo and redo (keys or toolbar) commit text still being
+  typed first, so it is undone like any other edit rather than lost.
 - *Selftest*: `--selftest OUT` drives the real event handlers through a
-  scripted session (toolbar clicks, every tool, undo and redo of a crop, text
-  move, save with confirmation, session round trip, Save As (empty name
+  scripted session (toolbar clicks, every tool, undo and redo of a crop and of
+  text still being typed, text move, save with confirmation, session round trip, Save As (empty name
   refused, typed extension replaced), refusal to replace the original) and checks the end state.
   `--selftest-picker`, run as a naked call in a prepared folder, checks the
   listing, thumbnails, filtering, folder navigation, opening, the unsaved
